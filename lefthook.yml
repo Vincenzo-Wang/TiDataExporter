@@ -1,0 +1,59 @@
+commit-msg:
+  commands:
+    validate:
+      run: |
+        commit_msg=$(cat {1})
+        if ! echo "$commit_msg" | grep -qE "^(AI|Manual)-(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)"; then
+          echo "================================================================="
+          echo "[REJECTED] ❌Invalid Commit Message Format"
+          echo "✅Required format:"
+          echo "1. Must start with 'AI-' or 'Manual-'"
+          echo "2. Followed by: feat, fix, docs, style, refactor, test, chore, perf, ci, build, revert"
+          echo "Example: AI-feat: add login feature"
+          echo "================================================================="
+          exit 1
+        fi
+
+
+# EXAMPLE USAGE:
+#
+#   Refer for explanation to following link:
+#   https://lefthook.dev/configuration/
+#
+# pre-push:
+#   jobs:
+#     - name: packages audit
+#       tags:
+#         - frontend
+#         - security
+#       run: yarn audit
+#
+#     - name: gems audit
+#       tags:
+#         - backend
+#         - security
+#       run: bundle audit
+#
+# pre-commit:
+#   parallel: true
+#   jobs:
+#     - run: yarn eslint {staged_files}
+#       glob: "*.{js,ts,jsx,tsx}"
+#
+#     - name: rubocop
+#       glob: "*.rb"
+#       exclude:
+#         - config/application.rb
+#         - config/routes.rb
+#       run: bundle exec rubocop --force-exclusion {all_files}
+#
+#     - name: govet
+#       files: git ls-files -m
+#       glob: "*.go"
+#       run: go vet {files}
+#
+#     - script: "hello.js"
+#       runner: node
+#
+#     - script: "hello.go"
+#       runner: go run
