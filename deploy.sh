@@ -30,27 +30,98 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Docker 运行方式
+USE_SUDO_DOCKER=0
+COMPOSE_COMMAND=""
+
 # 检查命令是否存在
 check_command() {
-    if ! command -v $1 &> /dev/null; then
+    if ! command -v "$1" &> /dev/null; then
         log_error "$1 未安装，请先安装 $1"
         exit 1
+    fi
+}
+
+# 执行 docker 命令（自动处理 sudo）
+docker_cmd() {
+    if [ "$USE_SUDO_DOCKER" -eq 1 ]; then
+        sudo docker "$@"
+    else
+        docker "$@"
+    fi
+}
+
+# 执行 compose 命令（兼容 docker-compose 和 docker compose）
+compose_cmd() {
+    if [ "$COMPOSE_COMMAND" = "docker-compose" ]; then
+        if [ "$USE_SUDO_DOCKER" -eq 1 ]; then
+            sudo docker-compose "$@"
+        else
+            docker-compose "$@"
+        fi
+    else
+        docker_cmd compose "$@"
+    fi
+}
+
+# 检测 Docker 与 Compose 运行方式
+detect_docker_mode() {
+    check_command docker
+
+    # 检测 compose 命令类型
+    if command -v docker-compose &> /dev/null; then
+        COMPOSE_COMMAND="docker-compose"
+    elif docker compose version &> /dev/null || sudo -n docker compose version &> /dev/null || sudo docker compose version &> /dev/null; then
+        COMPOSE_COMMAND="docker compose"
+    else
+        log_error "未检测到 docker-compose 或 docker compose，请先安装 Docker Compose"
+        exit 1
+    fi
+
+    # 检测 docker 是否需要 sudo
+    if docker info &> /dev/null; then
+        USE_SUDO_DOCKER=0
+    elif sudo -n docker info &> /dev/null || sudo docker info &> /dev/null; then
+        USE_SUDO_DOCKER=1
+        log_warning "检测到当前用户需要 sudo 执行 docker，后续将自动使用 sudo"
+    else
+        log_error "无法执行 docker 命令，请检查 Docker 是否运行或当前用户 sudo 权限"
+        exit 1
+    fi
+
+    # 校验 compose 是否可用
+    if [ "$COMPOSE_COMMAND" = "docker-compose" ]; then
+        if [ "$USE_SUDO_DOCKER" -eq 1 ]; then
+            sudo docker-compose version &> /dev/null || {
+                log_error "检测到 docker-compose，但 sudo 无法执行 docker-compose"
+                exit 1
+            }
+        else
+            docker-compose version &> /dev/null || {
+                log_error "docker-compose 不可用"
+                exit 1
+            }
+        fi
+    else
+        compose_cmd version &> /dev/null || {
+            log_error "docker compose 不可用"
+            exit 1
+        }
     fi
 }
 
 # 检查环境
 check_environment() {
     log_info "检查环境..."
-    
-    check_command docker
-    check_command docker-compose
-    
+
+    detect_docker_mode
+
     # 检查 Docker 是否运行
-    if ! docker info &> /dev/null; then
+    if ! docker_cmd info &> /dev/null; then
         log_error "Docker 未运行，请先启动 Docker"
         exit 1
     fi
-    
+
     log_success "环境检查通过"
 }
 
@@ -103,7 +174,7 @@ create_directories() {
 build_images() {
     log_info "构建 Docker 镜像..."
     
-    docker-compose build --no-cache
+    compose_cmd build --no-cache
     
     log_success "镜像构建完成"
 }
@@ -113,16 +184,16 @@ start_services() {
     log_info "启动服务..."
     
     # 停止旧容器
-    docker-compose down --remove-orphans 2>/dev/null || true
+    compose_cmd down --remove-orphans 2>/dev/null || true
     
     # 启动 MySQL
     log_info "启动 MySQL..."
-    docker-compose up -d mysql
+    compose_cmd up -d mysql
     
     # 等待 MySQL 就绪
     log_info "等待 MySQL 就绪..."
     sleep 30
-    until docker-compose exec -T mysql mysqladmin ping -h localhost --silent; do
+    until compose_cmd exec -T mysql mysqladmin ping -h localhost --silent; do
         log_info "等待 MySQL..."
         sleep 5
     done
@@ -130,12 +201,12 @@ start_services() {
     
     # 启动 Redis
     log_info "启动 Redis..."
-    docker-compose up -d redis
+    compose_cmd up -d redis
     
     # 等待 Redis 就绪
     log_info "等待 Redis 就绪..."
     sleep 10
-    until docker-compose exec -T redis redis-cli -a ${REDIS_PASSWORD:-redis123} ping | grep -q PONG; do
+    until compose_cmd exec -T redis redis-cli -a ${REDIS_PASSWORD:-redis123} ping | grep -q PONG; do
         log_info "等待 Redis..."
         sleep 2
     done
@@ -143,7 +214,7 @@ start_services() {
     
     # 启动后端
     log_info "启动后端服务..."
-    docker-compose up -d backend
+    compose_cmd up -d backend
     
     # 等待后端就绪
     log_info "等待后端服务就绪..."
@@ -156,7 +227,7 @@ start_services() {
     
     # 启动前端
     log_info "启动前端服务..."
-    docker-compose up -d frontend
+    compose_cmd up -d frontend
     
     # 等待前端就绪
     sleep 5
@@ -169,9 +240,9 @@ start_services() {
 show_status() {
     log_info "服务状态："
     echo ""
-    docker-compose ps
+    compose_cmd ps
     echo ""
-    
+
     log_success "=========================================="
     log_success "部署完成！"
     log_success "=========================================="
@@ -225,7 +296,7 @@ show_help() {
 # 停止服务
 stop_services() {
     log_info "停止所有服务..."
-    docker-compose down
+    compose_cmd down
     log_success "服务已停止"
 }
 
@@ -234,7 +305,7 @@ clean_all() {
     log_warning "这将删除所有容器、卷和数据！"
     read -p "确认继续？(y/n): " confirm
     if [ "$confirm" = "y" ]; then
-        docker-compose down -v --remove-orphans
+        compose_cmd down -v --remove-orphans
         rm -rf mysql_data redis_data
         log_success "清理完成"
     else
@@ -249,7 +320,7 @@ backup_database() {
     BACKUP_FILE="backup_$(date +%Y%m%d_%H%M%S).sql"
     source .env
     
-    docker-compose exec -T mysql mysqldump -u root -p${MYSQL_ROOT_PASSWORD:-root123} \
+    compose_cmd exec -T mysql mysqldump -u root -p${MYSQL_ROOT_PASSWORD:-root123} \
         --single-transaction \
         --routines \
         --triggers \
@@ -264,9 +335,9 @@ backup_database() {
 # 查看日志
 show_logs() {
     if [ -z "$1" ]; then
-        docker-compose logs -f --tail=100
+        compose_cmd logs -f --tail=100
     else
-        docker-compose logs -f --tail=100 $1
+        compose_cmd logs -f --tail=100 "$1"
     fi
 }
 
@@ -283,29 +354,34 @@ main() {
             show_status
             ;;
         stop)
+            detect_docker_mode
             stop_services
             ;;
         restart)
-            stop_services
             check_environment
+            stop_services
             start_services
             health_check
             show_status
             ;;
         status)
-            docker-compose ps
+            detect_docker_mode
+            compose_cmd ps
             ;;
         logs)
-            show_logs $2
+            detect_docker_mode
+            show_logs "$2"
             ;;
         build)
             check_environment
             build_images
             ;;
         clean)
+            detect_docker_mode
             clean_all
             ;;
         backup)
+            detect_docker_mode
             backup_database
             ;;
         help|--help|-h)
