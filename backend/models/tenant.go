@@ -8,14 +8,16 @@ import (
 
 // Tenant 租户
 type Tenant struct {
-	ID                int64          `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name              string         `gorm:"type:varchar(100);not null" json:"name"`
-	APIKey            string         `gorm:"type:varchar(64);uniqueIndex;not null;column:api_key" json:"-"`
-	APISecretEncrypted string        `gorm:"type:text;not null;column:api_secret_encrypted" json:"-"`
-	Status            int8           `gorm:"type:tinyint;default:1;index" json:"status"`
-	CreatedAt         time.Time      `gorm:"precision:0" json:"created_at"`
-	UpdatedAt         time.Time      `gorm:"precision:0;autoUpdateTime" json:"updated_at"`
-	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
+	ID                 int64          `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name               string         `gorm:"type:varchar(100);not null" json:"name"`
+	Code               string         `gorm:"type:varchar(50);uniqueIndex;column:code" json:"code"`
+	ContactEmail       string         `gorm:"type:varchar(100);column:contact_email" json:"contact_email"`
+	APIKey             string         `gorm:"type:varchar(64);uniqueIndex;not null;column:api_key" json:"-"`
+	APISecretEncrypted string         `gorm:"type:text;not null;column:api_secret_encrypted" json:"-"`
+	Status             int8           `gorm:"type:tinyint;default:1;index" json:"status"`
+	CreatedAt          time.Time      `gorm:"precision:0" json:"created_at"`
+	UpdatedAt          time.Time      `gorm:"precision:0;autoUpdateTime" json:"updated_at"`
+	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (Tenant) TableName() string {

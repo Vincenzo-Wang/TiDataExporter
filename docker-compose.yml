@@ -97,6 +97,35 @@ services:
       timeout: 10s
       retries: 3
 
+  # Worker Service (Task Executor)
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: claw-worker
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=${MYSQL_USER:-claw}
+      - DB_PASSWORD=${MYSQL_PASSWORD:-claw123}
+      - DB_NAME=${MYSQL_DATABASE:-claw_export}
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-redis123}
+      - AES_KEY=${AES_KEY:-claw-export-aes-key-32-bytes!!!!}
+      - DUMPLING_PATH=/usr/local/bin/dumpling
+      - WORKER_COUNT=${WORKER_COUNT:-4}
+    volumes:
+      - ${HOST_DUMPLING_PATH:-/usr/local/bin/dumpling}:/usr/local/bin/dumpling:ro
+      - tmp_data:/tmp/exports
+    user: "0:0"  # Run as root for volume access
+
 volumes:
   mysql_data:
     driver: local

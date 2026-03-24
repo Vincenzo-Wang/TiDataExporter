@@ -1,0 +1,39 @@
+# Build stage
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Tidy dependencies and build the worker
+RUN go mod tidy && \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o worker ./cmd/worker
+
+# Final stage
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates tzdata dumb-init
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /app/worker .
+
+# Create non-root user and ensure work directory is writable
+RUN addgroup -g 1000 appgroup && \
+    adduser -u 1000 -G appgroup -D appuser && \
+    chown -R appuser:appgroup /app && \
+    mkdir -p /tmp/exports && \
+    chown -R appuser:appgroup /tmp/exports
+
+USER appuser
+
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+CMD ["./worker"]

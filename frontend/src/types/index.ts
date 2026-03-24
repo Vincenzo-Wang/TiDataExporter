@@ -13,11 +13,13 @@ export interface Tenant {
   code: string;
   contact_email: string;
   api_key: string;
-  api_secret_encrypted: string;
   quota_daily: number;
   quota_used_today: number;
   quota_monthly: number;
   quota_used_month: number;
+  max_concurrent: number;
+  max_size_gb: number;
+  retention_hours: number;
   status: number;
   created_at: string;
   updated_at: string;
@@ -30,11 +32,12 @@ export interface TiDBConfig {
   host: string;
   port: number;
   username: string;
-  password_encrypted: string;
   database: string;
   ssl_mode: string;
   status: number;
+  is_default: number;
   created_at: string;
+  updated_at: string;
 }
 
 export interface S3Config {
@@ -44,35 +47,53 @@ export interface S3Config {
   endpoint: string;
   bucket: string;
   region: string;
-  access_key_id_encrypted: string;
-  secret_access_key_encrypted: string;
   path_prefix: string;
   status: number;
+  is_default: number;
   created_at: string;
+  updated_at: string;
 }
+
+export type TaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'canceled' | 'expired';
 
 export interface ExportTask {
   id: number;
+  task_id: number;
   tenant_id: number;
-  task_no: string;
+  tenant_name: string;
+  task_name: string;
+  tidb_config_id: number;
   tidb_config_name: string;
+  s3_config_id: number;
   s3_config_name: string;
   sql_text: string;
   filetype: string;
   compress: string;
-  s3_path: string;
+  file_url: string;
   file_size: number;
   row_count: number;
-  status: number;
+  status: TaskStatus;
   progress: number;
   error_message: string;
+  cancel_reason: string;
   retry_count: number;
+  max_retries: number;
   priority: number;
   retention_hours: number;
-  created_at: string;
   started_at: string;
   completed_at: string;
-  expired_at: string;
+  expires_at: string;
+  canceled_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskLog {
+  id: number;
+  task_id: number;
+  log_level: string;
+  message: string;
+  created_at: string;
 }
 
 export interface TaskStatistics {

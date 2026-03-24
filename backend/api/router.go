@@ -106,11 +106,14 @@ func (r *Router) Setup(engine *gin.Engine) {
 		adminAuthGroup.GET("/tenants/:id", r.getTenant)
 		adminAuthGroup.PUT("/tenants/:id", r.updateTenant)
 		adminAuthGroup.DELETE("/tenants/:id", r.deleteTenant)
+		adminAuthGroup.POST("/tenants/:id/regenerate-keys", r.regenerateTenantKeys)
 
 		// 任务管理
 		adminAuthGroup.GET("/tasks", r.listTasks)
 		adminAuthGroup.GET("/tasks/:id", r.getTask)
 		adminAuthGroup.GET("/tasks/:id/logs", r.getTaskLogs)
+		adminAuthGroup.POST("/tasks/:id/cancel", r.cancelTask)
+		adminAuthGroup.POST("/tasks/:id/retry", r.retryTask)
 
 		// TiDB配置管理
 		adminAuthGroup.GET("/tidb-configs", r.listTiDBConfigs)
@@ -126,6 +129,10 @@ func (r *Router) Setup(engine *gin.Engine) {
 
 		// 审计日志
 		adminAuthGroup.GET("/audit-logs", r.listAuditLogs)
+
+		// 统计信息
+		adminAuthGroup.GET("/statistics/overview", r.getStatisticsOverview)
+		adminAuthGroup.GET("/statistics/daily", r.getDailyStatistics)
 	}
 }
 
@@ -160,15 +167,74 @@ func (r *Router) listTenants(c *gin.Context) {
 		return
 	}
 
-	// 构建响应（不返回敏感字段）
+	// 获取所有租户ID
+	tenantIDs := make([]int64, len(tenants))
+	for i, t := range tenants {
+		tenantIDs[i] = t.ID
+	}
+
+	// 批量查询配额
+	var quotas []models.TenantQuota
+	quotaMap := make(map[int64]models.TenantQuota)
+	if err := r.db.Where("tenant_id IN ?", tenantIDs).Find(&quotas).Error; err != nil {
+		r.logger.Error("failed to fetch quotas", zap.Error(err))
+	}
+	for _, q := range quotas {
+		quotaMap[q.TenantID] = q
+	}
+
+	// 统计每日和每月任务数
+	type TaskCount struct {
+		TenantID int64
+		Count    int64
+	}
+	var dailyCounts []TaskCount
+	var monthlyCounts []TaskCount
+
+	// 今日任务数
+	today := time.Now().Format("2006-01-02")
+	r.db.Model(&models.ExportTask{}).
+		Select("tenant_id, COUNT(*) as count").
+		Where("tenant_id IN ? AND DATE(created_at) = ?", tenantIDs, today).
+		Group("tenant_id").
+		Scan(&dailyCounts)
+
+	// 本月任务数
+	monthStart := time.Now().Format("2006-01") + "-01"
+	r.db.Model(&models.ExportTask{}).
+		Select("tenant_id, COUNT(*) as count").
+		Where("tenant_id IN ? AND DATE(created_at) >= ?", tenantIDs, monthStart).
+		Group("tenant_id").
+		Scan(&monthlyCounts)
+
+	dailyCountMap := make(map[int64]int64)
+	for _, dc := range dailyCounts {
+		dailyCountMap[dc.TenantID] = dc.Count
+	}
+	monthlyCountMap := make(map[int64]int64)
+	for _, mc := range monthlyCounts {
+		monthlyCountMap[mc.TenantID] = mc.Count
+	}
+
+	// 构建响应
 	items := make([]gin.H, len(tenants))
 	for i, t := range tenants {
+		quota := quotaMap[t.ID]
 		items[i] = gin.H{
-			"tenant_id":  t.ID,
-			"name":       t.Name,
-			"api_key":    t.APIKey,
-			"status":     t.Status,
-			"created_at": t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"id":                t.ID,
+			"name":              t.Name,
+			"code":              t.Code,
+			"contact_email":     t.ContactEmail,
+			"api_key":           t.APIKey,
+			"status":            t.Status,
+			"quota_daily":       quota.MaxDailyTasks,
+			"quota_monthly":     quota.MaxDailyTasks * 30, // 月配额按日配额*30计算
+			"quota_used_today":  dailyCountMap[t.ID],
+			"quota_used_month":  monthlyCountMap[t.ID],
+			"max_concurrent":    quota.MaxConcurrentTasks,
+			"max_size_gb":       quota.MaxDailySizeGB,
+			"retention_hours":   quota.MaxRetentionHours,
+			"created_at":        t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		}
 	}
 
@@ -184,8 +250,12 @@ func (r *Router) listTenants(c *gin.Context) {
 }
 
 type createTenantRequest struct {
-	Name   string `json:"name" binding:"required"`
-	Status int8   `json:"status"`
+	Name         string `json:"name" binding:"required"`
+	Code         string `json:"code" binding:"required"`
+	ContactEmail string `json:"contact_email"`
+	QuotaDaily   int    `json:"quota_daily"`
+	QuotaMonthly int    `json:"quota_monthly"`
+	Status       int8   `json:"status"`
 }
 
 // createTenant 创建租户
@@ -208,14 +278,22 @@ func (r *Router) createTenant(c *gin.Context) {
 		return
 	}
 
-	// 设置默认状态
+	// 设置默认值
 	if req.Status == 0 {
 		req.Status = 1
+	}
+	if req.QuotaDaily == 0 {
+		req.QuotaDaily = 100
+	}
+	if req.QuotaMonthly == 0 {
+		req.QuotaMonthly = 3000
 	}
 
 	// 创建租户
 	tenant := &models.Tenant{
 		Name:               req.Name,
+		Code:               req.Code,
+		ContactEmail:       req.ContactEmail,
 		APIKey:             apiKey,
 		APISecretEncrypted: apiSecretEncrypted,
 		Status:             req.Status,
@@ -227,11 +305,11 @@ func (r *Router) createTenant(c *gin.Context) {
 		return
 	}
 
-	// 创建默认配额
+	// 创建配额
 	quota := &models.TenantQuota{
 		TenantID:           tenant.ID,
 		MaxConcurrentTasks: 5,
-		MaxDailyTasks:      100,
+		MaxDailyTasks:      req.QuotaDaily,
 		MaxDailySizeGB:     50,
 		MaxRetentionHours:  720,
 	}
@@ -241,17 +319,22 @@ func (r *Router) createTenant(c *gin.Context) {
 	}
 
 	// 记录审计日志
-	r.recordAuditLog(c, "create", "tenant", tenant.ID, gin.H{"name": req.Name}, "success")
+	r.recordAuditLog(c, "create", "tenant", tenant.ID, gin.H{"name": req.Name, "code": req.Code}, "success")
 
 	c.JSON(201, gin.H{
 		"code":    0,
 		"message": "租户创建成功",
 		"data": gin.H{
-			"tenant_id":  tenant.ID,
-			"api_key":    apiKey,
-			"api_secret": apiSecret, // 只在创建时返回一次
-			"name":       tenant.Name,
-			"status":     tenant.Status,
+			"id":          tenant.ID,
+			"tenant_id":   tenant.ID,
+			"api_key":     apiKey,
+			"api_secret":  apiSecret, // 只在创建时返回一次
+			"name":        tenant.Name,
+			"code":        tenant.Code,
+			"contact_email": tenant.ContactEmail,
+			"status":      tenant.Status,
+			"quota_daily": req.QuotaDaily,
+			"quota_monthly": req.QuotaMonthly,
 			"created_at": tenant.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		},
 	})
@@ -448,23 +531,85 @@ func (r *Router) listTasks(c *gin.Context) {
 		return
 	}
 
+	// 获取配置名称映射
+	tidbConfigIDs := make([]int64, 0)
+	s3ConfigIDs := make([]int64, 0)
+	for _, task := range tasks {
+		tidbConfigIDs = append(tidbConfigIDs, task.TiDBConfigID)
+		s3ConfigIDs = append(s3ConfigIDs, task.S3ConfigID)
+	}
+
+	tidbConfigMap := make(map[int64]string)
+	s3ConfigMap := make(map[int64]string)
+
+	if len(tidbConfigIDs) > 0 {
+		var tidbConfigs []models.TiDBConfig
+		r.db.Select("id, name").Where("id IN ?", tidbConfigIDs).Find(&tidbConfigs)
+		for _, cfg := range tidbConfigs {
+			tidbConfigMap[cfg.ID] = cfg.Name
+		}
+	}
+
+	if len(s3ConfigIDs) > 0 {
+		var s3Configs []models.S3Config
+		r.db.Select("id, name").Where("id IN ?", s3ConfigIDs).Find(&s3Configs)
+		for _, cfg := range s3Configs {
+			s3ConfigMap[cfg.ID] = cfg.Name
+		}
+	}
+
+	// 计算进度
+	calculateProgress := func(task models.ExportTask) int {
+		switch task.Status {
+		case models.TaskStatusPending:
+			return 0
+		case models.TaskStatusRunning:
+			return 50
+		case models.TaskStatusSuccess:
+			return 100
+		case models.TaskStatusFailed, models.TaskStatusCanceled, models.TaskStatusExpired:
+			return 100
+		default:
+			return 0
+		}
+	}
+
 	// 构建响应
 	items := make([]gin.H, len(tasks))
 	for i, task := range tasks {
 		item := gin.H{
-			"task_id":     task.ID,
-			"task_name":   task.TaskName,
-			"tenant_id":   task.TenantID,
-			"status":      task.Status,
-			"file_size":   task.FileSize,
-			"row_count":   task.RowCount,
-			"retry_count": task.RetryCount,
-			"created_at":  task.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"task_id":          task.ID,
+			"task_name":        task.TaskName,
+			"tenant_id":        task.TenantID,
+			"tidb_config_id":   task.TiDBConfigID,
+			"s3_config_id":     task.S3ConfigID,
+			"filetype":         task.Filetype,
+			"compress":         task.Compress,
+			"retention_hours":  task.RetentionHours,
+			"priority":         task.Priority,
+			"status":           task.Status,
+			"progress":         calculateProgress(task),
+			"file_url":         task.FileURL,
+			"file_size":        task.FileSize,
+			"row_count":        task.RowCount,
+			"retry_count":      task.RetryCount,
+			"max_retries":      task.MaxRetries,
+			"error_message":    task.ErrorMessage,
+			"created_at":       task.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"updated_at":       task.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		}
 
 		// 添加租户名称
 		if task.Tenant.ID != 0 {
 			item["tenant_name"] = task.Tenant.Name
+		}
+
+		// 添加配置名称
+		if name, ok := tidbConfigMap[task.TiDBConfigID]; ok {
+			item["tidb_config_name"] = name
+		}
+		if name, ok := s3ConfigMap[task.S3ConfigID]; ok {
+			item["s3_config_name"] = name
 		}
 
 		if task.StartedAt != nil {
@@ -473,8 +618,8 @@ func (r *Router) listTasks(c *gin.Context) {
 		if task.CompletedAt != nil {
 			item["completed_at"] = task.CompletedAt.Format("2006-01-02T15:04:05Z07:00")
 		}
-		if task.ErrorMessage != "" {
-			item["error_message"] = task.ErrorMessage
+		if task.ExpiresAt != nil {
+			item["expires_at"] = task.ExpiresAt.Format("2006-01-02T15:04:05Z07:00")
 		}
 
 		items[i] = item
@@ -516,34 +661,47 @@ func (r *Router) getTask(c *gin.Context) {
 	var s3Config models.S3Config
 	r.db.Select("name").First(&s3Config, task.S3ConfigID)
 
-	data := gin.H{
-		"task_id":            task.ID,
-		"task_name":          task.TaskName,
-		"tenant_id":          task.TenantID,
-		"tenant_name":        task.Tenant.Name,
-		"tidb_config_name":   tidbConfig.Name,
-		"s3_config_name":     s3Config.Name,
-		"filetype":           task.Filetype,
-		"compress":           task.Compress,
-		"retention_hours":    task.RetentionHours,
-		"priority":           task.Priority,
-		"status":             task.Status,
-		"file_url":           task.FileURL,
-		"file_size":          task.FileSize,
-		"row_count":          task.RowCount,
-		"retry_count":        task.RetryCount,
-		"max_retries":        task.MaxRetries,
-		"error_message":      task.ErrorMessage,
-		"cancel_reason":      task.CancelReason,
-		"created_at":         task.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		"updated_at":         task.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	// 计算进度
+	calculateProgress := func(task models.ExportTask) int {
+		switch task.Status {
+		case models.TaskStatusPending:
+			return 0
+		case models.TaskStatusRunning:
+			return 50
+		case models.TaskStatusSuccess:
+			return 100
+		case models.TaskStatusFailed, models.TaskStatusCanceled, models.TaskStatusExpired:
+			return 100
+		default:
+			return 0
+		}
 	}
 
-	// SQL脱敏（只显示前100字符）
-	if len(task.SqlText) > 100 {
-		data["sql_text_preview"] = task.SqlText[:100] + "..."
-	} else {
-		data["sql_text_preview"] = task.SqlText
+	data := gin.H{
+		"task_id":          task.ID,
+		"task_name":        task.TaskName,
+		"tenant_id":        task.TenantID,
+		"tenant_name":      task.Tenant.Name,
+		"tidb_config_id":   task.TiDBConfigID,
+		"tidb_config_name": tidbConfig.Name,
+		"s3_config_id":     task.S3ConfigID,
+		"s3_config_name":   s3Config.Name,
+		"sql_text":         task.SqlText,
+		"filetype":         task.Filetype,
+		"compress":         task.Compress,
+		"retention_hours":  task.RetentionHours,
+		"priority":         task.Priority,
+		"status":           task.Status,
+		"progress":         calculateProgress(task),
+		"file_url":         task.FileURL,
+		"file_size":        task.FileSize,
+		"row_count":        task.RowCount,
+		"retry_count":      task.RetryCount,
+		"max_retries":      task.MaxRetries,
+		"error_message":    task.ErrorMessage,
+		"cancel_reason":    task.CancelReason,
+		"created_at":       task.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		"updated_at":       task.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
 	if task.StartedAt != nil {
@@ -635,11 +793,30 @@ func (r *Router) listTiDBConfigs(c *gin.Context) {
 		return
 	}
 
+	// 构建响应（排除敏感字段）
+	items := make([]gin.H, len(configs))
+	for i, cfg := range configs {
+		items[i] = gin.H{
+			"id":          cfg.ID,
+			"tenant_id":   cfg.TenantID,
+			"name":        cfg.Name,
+			"host":        cfg.Host,
+			"port":        cfg.Port,
+			"username":    cfg.Username,
+			"database":    cfg.Database,
+			"ssl_mode":    cfg.SSLMode,
+			"status":      cfg.Status,
+			"is_default":  cfg.IsDefault,
+			"created_at":  cfg.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"updated_at":  cfg.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		}
+	}
+
 	c.JSON(200, gin.H{
 		"code": 0,
 		"data": gin.H{
 			"total": total,
-			"items": configs,
+			"items": items,
 		},
 	})
 }
@@ -829,11 +1006,29 @@ func (r *Router) listS3Configs(c *gin.Context) {
 		return
 	}
 
+	// 构建响应（排除敏感字段）
+	items := make([]gin.H, len(configs))
+	for i, cfg := range configs {
+		items[i] = gin.H{
+			"id":          cfg.ID,
+			"tenant_id":   cfg.TenantID,
+			"name":        cfg.Name,
+			"endpoint":    cfg.Endpoint,
+			"bucket":      cfg.Bucket,
+			"region":      cfg.Region,
+			"path_prefix": cfg.PathPrefix,
+			"status":      cfg.Status,
+			"is_default":  cfg.IsDefault,
+			"created_at":  cfg.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"updated_at":  cfg.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		}
+	}
+
 	c.JSON(200, gin.H{
 		"code": 0,
 		"data": gin.H{
 			"total": total,
-			"items": configs,
+			"items": items,
 		},
 	})
 }
@@ -1072,6 +1267,150 @@ func (r *Router) listAuditLogs(c *gin.Context) {
 	})
 }
 
+// cancelTask 取消任务
+func (r *Router) cancelTask(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "无效的ID")
+		return
+	}
+
+	var task models.ExportTask
+	if err := r.db.First(&task, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			utils.NotFound(c, "任务不存在")
+			return
+		}
+		utils.InternalError(c, "查询失败")
+		return
+	}
+
+	// 检查任务状态
+	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusRunning {
+		utils.BadRequest(c, "只能取消待处理或运行中的任务")
+		return
+	}
+
+	// 更新任务状态
+	now := time.Now()
+	task.Status = models.TaskStatusCanceled
+	task.CanceledAt = &now
+	task.CancelReason = "管理员手动取消"
+
+	if err := r.db.Save(&task).Error; err != nil {
+		r.logger.Error("failed to cancel task", zap.Error(err))
+		utils.InternalError(c, "取消失败")
+		return
+	}
+
+	// 记录审计日志
+	r.recordAuditLog(c, "cancel", "task", task.ID, gin.H{"task_id": id}, "success")
+
+	c.JSON(200, gin.H{"code": 0, "message": "任务已取消"})
+}
+
+// retryTask 重试任务
+func (r *Router) retryTask(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "无效的ID")
+		return
+	}
+
+	var task models.ExportTask
+	if err := r.db.First(&task, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			utils.NotFound(c, "任务不存在")
+			return
+		}
+		utils.InternalError(c, "查询失败")
+		return
+	}
+
+	// 检查任务状态
+	if task.Status != models.TaskStatusFailed {
+		utils.BadRequest(c, "只能重试失败的任务")
+		return
+	}
+
+	// 检查重试次数
+	if task.RetryCount >= task.MaxRetries {
+		utils.BadRequest(c, "已达到最大重试次数")
+		return
+	}
+
+	// 更新任务状态
+	task.Status = models.TaskStatusPending
+	task.RetryCount++
+	task.ErrorMessage = ""
+	task.StartedAt = nil
+	task.CompletedAt = nil
+
+	if err := r.db.Save(&task).Error; err != nil {
+		r.logger.Error("failed to retry task", zap.Error(err))
+		utils.InternalError(c, "重试失败")
+		return
+	}
+
+	// 记录审计日志
+	r.recordAuditLog(c, "retry", "task", task.ID, gin.H{"task_id": id, "retry_count": task.RetryCount}, "success")
+
+	c.JSON(200, gin.H{"code": 0, "message": "任务已重新提交"})
+}
+
+// regenerateTenantKeys 重新生成租户密钥
+func (r *Router) regenerateTenantKeys(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "无效的ID")
+		return
+	}
+
+	var tenant models.Tenant
+	if err := r.db.First(&tenant, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			utils.NotFound(c, "租户不存在")
+			return
+		}
+		utils.InternalError(c, "查询失败")
+		return
+	}
+
+	// 生成新的 API Key 和 API Secret
+	newAPIKey := generateAPIKey()
+	newAPISecret := generateAPISecret()
+
+	// 加密新的 API Secret
+	apiSecretEncrypted, err := r.encryptor.Encrypt(newAPISecret)
+	if err != nil {
+		r.logger.Error("failed to encrypt api secret", zap.Error(err))
+		utils.InternalError(c, "加密密钥失败")
+		return
+	}
+
+	// 更新租户
+	tenant.APIKey = newAPIKey
+	tenant.APISecretEncrypted = apiSecretEncrypted
+
+	if err := r.db.Save(&tenant).Error; err != nil {
+		r.logger.Error("failed to update tenant keys", zap.Error(err))
+		utils.InternalError(c, "更新密钥失败")
+		return
+	}
+
+	// 记录审计日志
+	r.recordAuditLog(c, "regenerate_keys", "tenant", tenant.ID, gin.H{"tenant_id": id}, "success")
+
+	c.JSON(200, gin.H{
+		"code":    0,
+		"message": "密钥已重新生成",
+		"data": gin.H{
+			"api_key":    newAPIKey,
+			"api_secret": newAPISecret, // 只在创建时返回一次
+		},
+	})
+}
+
 // recordAuditLog 记录审计日志
 func (r *Router) recordAuditLog(c *gin.Context, action, resourceType string, resourceID int64, requestData interface{}, result string) {
 	adminID := c.GetInt64(string(middleware.ContextKeyAdminID))
@@ -1103,4 +1442,114 @@ func (r *Router) recordAuditLog(c *gin.Context, action, resourceType string, res
 // jsonMarshal 安全的JSON序列化
 func jsonMarshal(v interface{}) ([]byte, error) {
 	return json.Marshal(v)
+}
+
+// getStatisticsOverview 获取统计概览
+func (r *Router) getStatisticsOverview(c *gin.Context) {
+	// 统计各状态任务数量
+	type StatusCount struct {
+		Status string
+		Count  int64
+	}
+	var statusCounts []StatusCount
+	r.db.Model(&models.ExportTask{}).
+		Select("status, COUNT(*) as count").
+		Group("status").
+		Scan(&statusCounts)
+
+	// 转换为map
+	statusMap := make(map[string]int64)
+	for _, sc := range statusCounts {
+		statusMap[sc.Status] = sc.Count
+	}
+
+	// 计算总数和各状态数
+	var totalTasks int64
+	r.db.Model(&models.ExportTask{}).Count(&totalTasks)
+
+	// 统计总行数和总大小
+	type SumResult struct {
+		TotalRows int64
+		TotalSize int64
+	}
+	var sumResult SumResult
+	r.db.Model(&models.ExportTask{}).
+		Select("COALESCE(SUM(row_count), 0) as total_rows, COALESCE(SUM(file_size), 0) as total_size").
+		Where("status = ?", models.TaskStatusSuccess).
+		Scan(&sumResult)
+
+	// 计算平均执行时间（秒）
+	type AvgDuration struct {
+		AvgSeconds float64
+	}
+	var avgDuration AvgDuration
+	r.db.Raw(`
+		SELECT COALESCE(AVG(TIMESTAMPDIFF(SECOND, started_at, completed_at)), 0) as avg_seconds
+		FROM export_tasks
+		WHERE status = 'success' AND started_at IS NOT NULL AND completed_at IS NOT NULL
+	`).Scan(&avgDuration)
+
+	c.JSON(200, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"total_tasks":    totalTasks,
+			"pending_tasks":  statusMap[models.TaskStatusPending],
+			"running_tasks":  statusMap[models.TaskStatusRunning],
+			"success_tasks":  statusMap[models.TaskStatusSuccess],
+			"failed_tasks":   statusMap[models.TaskStatusFailed],
+			"canceled_tasks": statusMap[models.TaskStatusCanceled],
+			"total_rows":     sumResult.TotalRows,
+			"total_size":     sumResult.TotalSize,
+			"avg_duration":   int64(avgDuration.AvgSeconds),
+		},
+	})
+}
+
+// getDailyStatistics 获取每日统计数据
+func (r *Router) getDailyStatistics(c *gin.Context) {
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
+
+	// 默认最近30天
+	if startDate == "" {
+		startDate = time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+	}
+	if endDate == "" {
+		endDate = time.Now().Format("2006-01-02")
+	}
+
+	// 查询每日统计数据
+	type DailyStat struct {
+		Date         string
+		TaskCount    int64
+		SuccessCount int64
+		FailedCount  int64
+		TotalRows    int64
+		TotalSize    int64
+	}
+	var dailyStats []DailyStat
+
+	r.db.Raw(`
+		SELECT
+			DATE(created_at) as date,
+			COUNT(*) as task_count,
+			SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+			COALESCE(SUM(row_count), 0) as total_rows,
+			COALESCE(SUM(file_size), 0) as total_size
+		FROM export_tasks
+		WHERE DATE(created_at) >= ? AND DATE(created_at) <= ?
+		GROUP BY DATE(created_at)
+		ORDER BY date ASC
+	`, startDate, endDate).Scan(&dailyStats)
+
+	// 如果没有数据，返回空数组
+	if dailyStats == nil {
+		dailyStats = []DailyStat{}
+	}
+
+	c.JSON(200, gin.H{
+		"code": 0,
+		"data": dailyStats,
+	})
 }

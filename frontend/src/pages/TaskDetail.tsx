@@ -3,19 +3,18 @@ import { Card, Descriptions, Tag, Progress, Button, Space, Modal, Typography, me
 import { ArrowLeftOutlined, StopOutlined, RedoOutlined, CopyOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '@/services/api';
-import type { ApiResponse, ExportTask } from '@/types';
+import type { ApiResponse, ExportTask, TaskStatus } from '@/types';
 
 const { Text } = Typography;
 const { Paragraph } = Typography;
 
-const taskStatusMap: Record<number, { color: string; text: string }> = {
-  0: { color: 'default', text: '待处理' },
-  1: { color: 'processing', text: '运行中' },
-  2: { color: 'success', text: '成功' },
-  3: { color: 'error', text: '失败' },
-  4: { color: 'warning', text: '已取消' },
-  5: { color: 'default', text: '超时' },
-  6: { color: 'processing', text: '重试中' },
+const taskStatusMap: Record<TaskStatus, { color: string; text: string }> = {
+  pending: { color: 'default', text: '待处理' },
+  running: { color: 'processing', text: '运行中' },
+  success: { color: 'success', text: '成功' },
+  failed: { color: 'error', text: '失败' },
+  canceled: { color: 'warning', text: '已取消' },
+  expired: { color: 'default', text: '已过期' },
 };
 
 export default function TaskDetail() {
@@ -50,12 +49,12 @@ export default function TaskDetail() {
       content: '确定要取消此任务吗？',
       onOk: async () => {
         try {
-          const response = await api.post<ApiResponse<unknown>>(`/admin/tasks/${task.id}/cancel`);
+          const response = await api.post<ApiResponse<unknown>>(`/admin/tasks/${task.task_id}/cancel`);
           if (response.data.code === 0) {
             message.success('任务已取消');
             fetchTask();
           } else {
-            message.error(response.data.message);
+            message.error(response.data.message || '操作失败');
           }
         } catch {
           message.error('操作失败');
@@ -67,21 +66,21 @@ export default function TaskDetail() {
   const handleRetry = async () => {
     if (!task) return;
     try {
-      const response = await api.post<ApiResponse<unknown>>(`/admin/tasks/${task.id}/retry`);
+      const response = await api.post<ApiResponse<unknown>>(`/admin/tasks/${task.task_id}/retry`);
       if (response.data.code === 0) {
         message.success('任务已重新提交');
         fetchTask();
       } else {
-        message.error(response.data.message);
+        message.error(response.data.message || '操作失败');
       }
     } catch {
       message.error('操作失败');
     }
   };
 
-  const copyS3Path = () => {
-    if (task?.s3_path) {
-      navigator.clipboard.writeText(task.s3_path);
+  const copyFileUrl = () => {
+    if (task?.file_url) {
+      navigator.clipboard.writeText(task.file_url);
       message.success('已复制到剪贴板');
     }
   };
@@ -98,7 +97,7 @@ export default function TaskDetail() {
     return <Card loading={loading} />;
   }
 
-  const statusInfo = taskStatusMap[task.status] || { color: 'default', text: '未知' };
+  const statusInfo = taskStatusMap[task.status] || { color: 'default', text: task.status };
 
   return (
     <div>
@@ -106,38 +105,40 @@ export default function TaskDetail() {
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/tasks')}>
           返回列表
         </Button>
-        {(task.status === 0 || task.status === 1) && (
+        {(task.status === 'pending' || task.status === 'running') && (
           <Button danger icon={<StopOutlined />} onClick={handleCancel}>
             取消任务
           </Button>
         )}
-        {task.status === 3 && (
+        {task.status === 'failed' && (
           <Button icon={<RedoOutlined />} onClick={handleRetry}>
             重试任务
           </Button>
         )}
       </Space>
 
-      <Card title={`任务详情 - ${task.task_no}`} loading={loading}>
+      <Card title={`任务详情 - #${task.task_id}`} loading={loading}>
         <Descriptions column={2} bordered>
-          <Descriptions.Item label="任务编号">{task.task_no}</Descriptions.Item>
+          <Descriptions.Item label="任务ID">{task.task_id}</Descriptions.Item>
+          <Descriptions.Item label="任务名称">{task.task_name || '-'}</Descriptions.Item>
+          <Descriptions.Item label="租户">{task.tenant_name || `ID: ${task.tenant_id}`}</Descriptions.Item>
           <Descriptions.Item label="状态">
             <Tag color={statusInfo.color}>{statusInfo.text}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="进度">
-            <Progress percent={task.progress} />
+            <Progress percent={task.progress || 0} />
           </Descriptions.Item>
           <Descriptions.Item label="优先级">{task.priority}</Descriptions.Item>
-          <Descriptions.Item label="TiDB 配置">{task.tidb_config_name}</Descriptions.Item>
-          <Descriptions.Item label="S3 配置">{task.s3_config_name}</Descriptions.Item>
-          <Descriptions.Item label="文件类型">{task.filetype.toUpperCase()}</Descriptions.Item>
-          <Descriptions.Item label="压缩方式">{task.compress.toUpperCase()}</Descriptions.Item>
+          <Descriptions.Item label="TiDB 配置">{task.tidb_config_name || `ID: ${task.tidb_config_id}`}</Descriptions.Item>
+          <Descriptions.Item label="S3 配置">{task.s3_config_name || `ID: ${task.s3_config_id}`}</Descriptions.Item>
+          <Descriptions.Item label="文件类型">{task.filetype?.toUpperCase() || '-'}</Descriptions.Item>
+          <Descriptions.Item label="压缩方式">{task.compress?.toUpperCase() || '无'}</Descriptions.Item>
           <Descriptions.Item label="文件大小">{formatSize(task.file_size)}</Descriptions.Item>
           <Descriptions.Item label="数据行数">{task.row_count?.toLocaleString() || '-'}</Descriptions.Item>
-          <Descriptions.Item label="重试次数">{task.retry_count}</Descriptions.Item>
+          <Descriptions.Item label="重试次数">{task.retry_count} / {task.max_retries || 3}</Descriptions.Item>
           <Descriptions.Item label="保留时间">{task.retention_hours} 小时</Descriptions.Item>
           <Descriptions.Item label="创建时间">
-            {new Date(task.created_at).toLocaleString('zh-CN')}
+            {task.created_at ? new Date(task.created_at).toLocaleString('zh-CN') : '-'}
           </Descriptions.Item>
           <Descriptions.Item label="开始时间">
             {task.started_at ? new Date(task.started_at).toLocaleString('zh-CN') : '-'}
@@ -146,13 +147,13 @@ export default function TaskDetail() {
             {task.completed_at ? new Date(task.completed_at).toLocaleString('zh-CN') : '-'}
           </Descriptions.Item>
           <Descriptions.Item label="过期时间">
-            {task.expired_at ? new Date(task.expired_at).toLocaleString('zh-CN') : '-'}
+            {task.expires_at ? new Date(task.expires_at).toLocaleString('zh-CN') : '-'}
           </Descriptions.Item>
-          <Descriptions.Item label="S3 路径" span={2}>
+          <Descriptions.Item label="文件地址" span={2}>
             <Space>
-              <Text copyable={{ text: task.s3_path }}>{task.s3_path || '-'}</Text>
-              {task.s3_path && (
-                <Button type="link" size="small" icon={<CopyOutlined />} onClick={copyS3Path}>
+              <Text copyable={{ text: task.file_url }}>{task.file_url || '-'}</Text>
+              {task.file_url && (
+                <Button type="link" size="small" icon={<CopyOutlined />} onClick={copyFileUrl}>
                   复制
                 </Button>
               )}
@@ -169,6 +170,11 @@ export default function TaskDetail() {
           {task.error_message && (
             <Descriptions.Item label="错误信息" span={2}>
               <Text type="danger">{task.error_message}</Text>
+            </Descriptions.Item>
+          )}
+          {task.cancel_reason && (
+            <Descriptions.Item label="取消原因" span={2}>
+              <Text type="warning">{task.cancel_reason}</Text>
             </Descriptions.Item>
           )}
         </Descriptions>

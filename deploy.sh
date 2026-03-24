@@ -233,6 +233,14 @@ start_services() {
     sleep 5
     log_success "前端服务已就绪"
     
+    # 启动 Worker
+    log_info "启动 Worker 服务..."
+    compose_cmd up -d worker
+    
+    # 等待 Worker 就绪
+    sleep 5
+    log_success "Worker 服务已就绪"
+    
     log_success "所有服务启动完成！"
 }
 

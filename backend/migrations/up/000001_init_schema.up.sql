@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS admins (
 CREATE TABLE IF NOT EXISTS tenants (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(100) NOT NULL,
+    code VARCHAR(50) UNIQUE COMMENT '租户编码',
+    contact_email VARCHAR(100) COMMENT '联系邮箱',
     api_key VARCHAR(64) UNIQUE NOT NULL,
     api_secret_encrypted TEXT NOT NULL COMMENT 'AES-256加密存储',
     status TINYINT DEFAULT 1 COMMENT '1=启用 0=禁用',
@@ -42,7 +44,7 @@ CREATE TABLE IF NOT EXISTS tenant_quotas (
     max_retention_hours INT DEFAULT 720 COMMENT '最长文件保留时间(小时)',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    INDEX idx_tenant_id (tenant_id),
     UNIQUE KEY uk_tenant_id (tenant_id)
 ) ENGINE=InnoDB;
 
@@ -56,11 +58,13 @@ CREATE TABLE IF NOT EXISTS tidb_configs (
     username VARCHAR(100) NOT NULL,
     password_encrypted TEXT NOT NULL COMMENT 'AES-256加密存储',
     `database` VARCHAR(100),
+    ssl_mode VARCHAR(20) DEFAULT 'disabled' COMMENT 'SSL模式: disabled/preferred/required/verify_identity',
+    status TINYINT DEFAULT 1 COMMENT '1=启用 0=禁用',
     is_default TINYINT DEFAULT 0 COMMENT '是否为默认配置',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP NULL COMMENT '软删除标记',
-    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    INDEX idx_tenant_id (tenant_id),
     UNIQUE KEY uk_tenant_name (tenant_id, name),
     INDEX idx_tenant_default (tenant_id, is_default),
     INDEX idx_deleted_at (deleted_at)
@@ -77,11 +81,12 @@ CREATE TABLE IF NOT EXISTS s3_configs (
     bucket VARCHAR(100) NOT NULL,
     region VARCHAR(50),
     path_prefix VARCHAR(255) DEFAULT '' COMMENT '路径前缀',
+    status TINYINT DEFAULT 1 COMMENT '1=启用 0=禁用',
     is_default TINYINT DEFAULT 0 COMMENT '是否为默认配置',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP NULL COMMENT '软删除标记',
-    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    INDEX idx_tenant_id (tenant_id),
     UNIQUE KEY uk_tenant_name (tenant_id, name),
     INDEX idx_tenant_default (tenant_id, is_default),
     INDEX idx_deleted_at (deleted_at)
@@ -113,9 +118,9 @@ CREATE TABLE IF NOT EXISTS export_tasks (
     canceled_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
-    FOREIGN KEY (tidb_config_id) REFERENCES tidb_configs(id),
-    FOREIGN KEY (s3_config_id) REFERENCES s3_configs(id),
+    INDEX idx_tenant_id (tenant_id),
+    INDEX idx_tidb_config_id (tidb_config_id),
+    INDEX idx_s3_config_id (s3_config_id),
     INDEX idx_tenant_status (tenant_id, status),
     INDEX idx_priority (priority),
     INDEX idx_created_at (created_at),
@@ -129,7 +134,7 @@ CREATE TABLE IF NOT EXISTS task_logs (
     log_level VARCHAR(10) COMMENT 'INFO/ERROR/WARN',
     message TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (task_id) REFERENCES export_tasks(id) ON DELETE CASCADE,
+    INDEX idx_task_id (task_id),
     INDEX idx_task_created (task_id, created_at)
 ) ENGINE=InnoDB;
 
@@ -165,7 +170,7 @@ CREATE TABLE IF NOT EXISTS dumpling_templates (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP NULL COMMENT '软删除标记',
-    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    INDEX idx_tenant_id (tenant_id),
     UNIQUE KEY uk_tenant_name (tenant_id, name),
     INDEX idx_deleted_at (deleted_at)
 ) ENGINE=InnoDB;

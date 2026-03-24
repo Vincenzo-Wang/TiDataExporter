@@ -9,18 +9,17 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import api from '@/services/api';
-import type { ApiResponse, ExportTask, TaskStatistics } from '@/types';
+import type { ApiResponse, ExportTask, TaskStatus, TaskStatistics } from '@/types';
 
 const { Title } = Typography;
 
-const taskStatusMap: Record<number, { color: string; text: string }> = {
-  0: { color: 'default', text: '待处理' },
-  1: { color: 'processing', text: '运行中' },
-  2: { color: 'success', text: '成功' },
-  3: { color: 'error', text: '失败' },
-  4: { color: 'warning', text: '已取消' },
-  5: { color: 'default', text: '超时' },
-  6: { color: 'processing', text: '重试中' },
+const taskStatusMap: Record<TaskStatus, { color: string; text: string }> = {
+  pending: { color: 'default', text: '待处理' },
+  running: { color: 'processing', text: '运行中' },
+  success: { color: 'success', text: '成功' },
+  failed: { color: 'error', text: '失败' },
+  canceled: { color: 'warning', text: '已取消' },
+  expired: { color: 'default', text: '已过期' },
 };
 
 export default function Dashboard() {
@@ -56,9 +55,9 @@ export default function Dashboard() {
   const columns: ColumnsType<ExportTask> = [
     {
       title: '任务编号',
-      dataIndex: 'task_no',
-      key: 'task_no',
-      width: 140,
+      dataIndex: 'task_id',
+      key: 'task_id',
+      width: 100,
     },
     {
       title: '租户',
@@ -71,9 +70,9 @@ export default function Dashboard() {
       dataIndex: 'status',
       key: 'status',
       width: 100,
-      render: (status: number) => {
-        const { color, text } = taskStatusMap[status] || { color: 'default', text: '未知' };
-        return <Tag color={color}>{text}</Tag>;
+      render: (status: TaskStatus) => {
+        const info = taskStatusMap[status] || { color: 'default', text: status };
+        return <Tag color={info.color}>{info.text}</Tag>;
       },
     },
     {
@@ -81,7 +80,7 @@ export default function Dashboard() {
       dataIndex: 'progress',
       key: 'progress',
       width: 120,
-      render: (progress: number) => <Progress percent={progress} size="small" />,
+      render: (progress: number) => <Progress percent={progress || 0} size="small" />,
     },
     {
       title: '文件大小',
@@ -108,7 +107,7 @@ export default function Dashboard() {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 160,
-      render: (time: string) => new Date(time).toLocaleString('zh-CN'),
+      render: (time: string) => time ? new Date(time).toLocaleString('zh-CN') : '-',
     },
   ];
 
@@ -204,7 +203,7 @@ export default function Dashboard() {
         <Table
           columns={columns}
           dataSource={recentTasks}
-          rowKey="id"
+          rowKey="task_id"
           pagination={false}
           size="small"
         />

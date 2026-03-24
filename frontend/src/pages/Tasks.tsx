@@ -5,18 +5,17 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import api from '@/services/api';
-import type { ApiResponse, ExportTask, PaginatedResponse } from '@/types';
+import type { ApiResponse, ExportTask, TaskStatus, PaginatedResponse } from '@/types';
 
 const { RangePicker } = DatePicker;
 
-const taskStatusMap: Record<number, { color: string; text: string }> = {
-  0: { color: 'default', text: '待处理' },
-  1: { color: 'processing', text: '运行中' },
-  2: { color: 'success', text: '成功' },
-  3: { color: 'error', text: '失败' },
-  4: { color: 'warning', text: '已取消' },
-  5: { color: 'default', text: '超时' },
-  6: { color: 'processing', text: '重试中' },
+const taskStatusMap: Record<TaskStatus, { color: string; text: string }> = {
+  pending: { color: 'default', text: '待处理' },
+  running: { color: 'processing', text: '运行中' },
+  success: { color: 'success', text: '成功' },
+  failed: { color: 'error', text: '失败' },
+  canceled: { color: 'warning', text: '已取消' },
+  expired: { color: 'default', text: '已过期' },
 };
 
 const fileTypeMap: Record<string, string> = {
@@ -28,7 +27,9 @@ const fileTypeMap: Record<string, string> = {
 const compressMap: Record<string, string> = {
   none: '无',
   gzip: 'GZIP',
+  gz: 'GZIP',
   zstd: 'ZSTD',
+  snappy: 'Snappy',
 };
 
 export default function Tasks() {
@@ -39,7 +40,7 @@ export default function Tasks() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [searchText, setSearchText] = useState('');
-  const [statusFilter, setStatusFilter] = useState<number | undefined>();
+  const [statusFilter, setStatusFilter] = useState<TaskStatus | undefined>();
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
 
   const fetchTasks = useCallback(async () => {
@@ -50,7 +51,7 @@ export default function Tasks() {
         page_size: String(pageSize),
       });
       if (searchText) params.append('search', searchText);
-      if (statusFilter !== undefined) params.append('status', String(statusFilter));
+      if (statusFilter !== undefined) params.append('status', statusFilter);
       if (dateRange) {
         params.append('start_date', dateRange[0].format('YYYY-MM-DD'));
         params.append('end_date', dateRange[1].format('YYYY-MM-DD'));
@@ -83,7 +84,7 @@ export default function Tasks() {
             message.success('任务已取消');
             fetchTasks();
           } else {
-            message.error(response.data.message);
+            message.error(response.data.message || '操作失败');
           }
         } catch {
           message.error('操作失败');
@@ -99,7 +100,7 @@ export default function Tasks() {
         message.success('任务已重新提交');
         fetchTasks();
       } else {
-        message.error(response.data.message);
+        message.error(response.data.message || '操作失败');
       }
     } catch {
       message.error('操作失败');
@@ -108,30 +109,37 @@ export default function Tasks() {
 
   const columns: ColumnsType<ExportTask> = [
     {
-      title: '任务编号',
-      dataIndex: 'task_no',
-      key: 'task_no',
-      width: 140,
+      title: '任务ID',
+      dataIndex: 'task_id',
+      key: 'task_id',
+      width: 80,
       render: (text, record) => (
-        <Button type="link" onClick={() => navigate(`/tasks/${record.id}`)}>
+        <Button type="link" onClick={() => navigate(`/tasks/${record.task_id}`)}>
           {text}
         </Button>
       ),
     },
     {
+      title: '任务名称',
+      dataIndex: 'task_name',
+      key: 'task_name',
+      width: 150,
+      ellipsis: true,
+    },
+    {
       title: '租户',
-      dataIndex: 'tenant_id',
-      key: 'tenant_id',
-      width: 80,
+      dataIndex: 'tenant_name',
+      key: 'tenant_name',
+      width: 100,
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
       width: 100,
-      render: (status: number) => {
-        const { color, text } = taskStatusMap[status] || { color: 'default', text: '未知' };
-        return <Tag color={color}>{text}</Tag>;
+      render: (status: TaskStatus) => {
+        const info = taskStatusMap[status] || { color: 'default', text: status };
+        return <Tag color={info.color}>{info.text}</Tag>;
       },
     },
     {
@@ -139,7 +147,7 @@ export default function Tasks() {
       dataIndex: 'progress',
       key: 'progress',
       width: 120,
-      render: (progress: number) => <Progress percent={progress} size="small" />,
+      render: (progress: number) => <Progress percent={progress || 0} size="small" />,
     },
     {
       title: '文件类型',
@@ -153,7 +161,7 @@ export default function Tasks() {
       dataIndex: 'compress',
       key: 'compress',
       width: 80,
-      render: (compress: string) => compressMap[compress] || compress,
+      render: (compress: string) => compressMap[compress] || compress || '无',
     },
     {
       title: '文件大小',
@@ -176,45 +184,46 @@ export default function Tasks() {
       render: (count: number) => count?.toLocaleString() || '-',
     },
     {
-      title: '重试次数',
+      title: '重试',
       dataIndex: 'retry_count',
       key: 'retry_count',
-      width: 80,
+      width: 60,
+      render: (count: number, record) => `${count}/${record.max_retries || 3}`,
     },
     {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
       width: 160,
-      render: (time: string) => new Date(time).toLocaleString('zh-CN'),
+      render: (time: string) => time ? new Date(time).toLocaleString('zh-CN') : '-',
     },
     {
       title: '操作',
       key: 'action',
-      width: 150,
+      width: 120,
       render: (_, record) => (
         <Space size="small">
           <Button
             type="link"
             size="small"
             icon={<EyeOutlined />}
-            onClick={() => navigate(`/tasks/${record.id}`)}
+            onClick={() => navigate(`/tasks/${record.task_id}`)}
           />
-          {(record.status === 0 || record.status === 1) && (
+          {(record.status === 'pending' || record.status === 'running') && (
             <Button
               type="link"
               size="small"
               danger
               icon={<StopOutlined />}
-              onClick={() => handleCancel(record.id)}
+              onClick={() => handleCancel(record.task_id)}
             />
           )}
-          {record.status === 3 && (
+          {record.status === 'failed' && (
             <Button
               type="link"
               size="small"
               icon={<RedoOutlined />}
-              onClick={() => handleRetry(record.id)}
+              onClick={() => handleRetry(record.task_id)}
             />
           )}
         </Space>
@@ -236,7 +245,7 @@ export default function Tasks() {
       >
         <Space style={{ marginBottom: 16 }} wrap>
           <Input
-            placeholder="搜索任务编号"
+            placeholder="搜索任务名称"
             prefix={<SearchOutlined />}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
@@ -250,7 +259,7 @@ export default function Tasks() {
             value={statusFilter}
             onChange={setStatusFilter}
             options={Object.entries(taskStatusMap).map(([key, value]) => ({
-              value: Number(key),
+              value: key as TaskStatus,
               label: value.text,
             }))}
           />
@@ -263,7 +272,7 @@ export default function Tasks() {
         <Table
           columns={columns}
           dataSource={tasks}
-          rowKey="id"
+          rowKey="task_id"
           loading={loading}
           pagination={{
             current: page,
