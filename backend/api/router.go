@@ -1,9 +1,13 @@
 package api
 
 import (
+	"strconv"
+
 	"claw-export-platform/api/middleware"
+	"claw-export-platform/api/utils"
 	v1 "claw-export-platform/api/v1"
 	"claw-export-platform/config"
+	"claw-export-platform/models"
 	"claw-export-platform/pkg/encryption"
 	"claw-export-platform/pkg/queue"
 
@@ -166,42 +170,384 @@ func (r *Router) getTaskLogs(c *gin.Context) {
 }
 
 func (r *Router) listTiDBConfigs(c *gin.Context) {
-	// TODO: 实现TiDB配置列表
-	c.JSON(200, gin.H{"code": 0, "data": gin.H{"total": 0, "items": []interface{}{}}})
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	var total int64
+	var configs []models.TiDBConfig
+
+	// 统计总数
+	if err := r.db.Model(&models.TiDBConfig{}).Count(&total).Error; err != nil {
+		r.logger.Error("failed to count TiDB configs", zap.Error(err))
+		utils.InternalError(c, "查询失败")
+		return
+	}
+
+	// 分页查询
+	offset := (page - 1) * pageSize
+	if err := r.db.Order("id DESC").Offset(offset).Limit(pageSize).Find(&configs).Error; err != nil {
+		r.logger.Error("failed to list TiDB configs", zap.Error(err))
+		utils.InternalError(c, "查询失败")
+		return
+	}
+
+	c.JSON(200, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"total": total,
+			"items": configs,
+		},
+	})
+}
+
+type createTiDBConfigRequest struct {
+	TenantID int64  `json:"tenant_id" binding:"required"`
+	Name     string `json:"name" binding:"required"`
+	Host     string `json:"host" binding:"required"`
+	Port     int    `json:"port"`
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+	Database string `json:"database" binding:"required"`
+	SSLMode  string `json:"ssl_mode"`
+	Status   int8   `json:"status"`
 }
 
 func (r *Router) createTiDBConfig(c *gin.Context) {
-	// TODO: 实现创建TiDB配置
-	c.JSON(201, gin.H{"code": 0, "message": "created"})
+	var req createTiDBConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数验证失败: "+err.Error())
+		return
+	}
+
+	// 设置默认值
+	if req.Port == 0 {
+		req.Port = 4000
+	}
+	if req.SSLMode == "" {
+		req.SSLMode = "disabled"
+	}
+	if req.Status == 0 {
+		req.Status = 1
+	}
+
+	// 加密密码
+	passwordEncrypted, err := r.encryptor.Encrypt(req.Password)
+	if err != nil {
+		r.logger.Error("failed to encrypt password", zap.Error(err))
+		utils.InternalError(c, "加密密码失败")
+		return
+	}
+
+	config := &models.TiDBConfig{
+		TenantID:          req.TenantID,
+		Name:              req.Name,
+		Host:              req.Host,
+		Port:              req.Port,
+		Username:          req.Username,
+		PasswordEncrypted: passwordEncrypted,
+		Database:          req.Database,
+		SSLMode:           req.SSLMode,
+		Status:            req.Status,
+	}
+
+	if err := r.db.Create(config).Error; err != nil {
+		r.logger.Error("failed to create TiDB config", zap.Error(err))
+		utils.InternalError(c, "创建失败")
+		return
+	}
+
+	c.JSON(201, gin.H{"code": 0, "message": "created", "data": gin.H{"id": config.ID}})
+}
+
+type updateTiDBConfigRequest struct {
+	Name     string `json:"name"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Database string `json:"database"`
+	SSLMode  string `json:"ssl_mode"`
+	Status   int8   `json:"status"`
 }
 
 func (r *Router) updateTiDBConfig(c *gin.Context) {
-	// TODO: 实现更新TiDB配置
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "无效的ID")
+		return
+	}
+
+	var config models.TiDBConfig
+	if err := r.db.First(&config, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			utils.NotFound(c, "配置不存在")
+			return
+		}
+		utils.InternalError(c, "查询失败")
+		return
+	}
+
+	var req updateTiDBConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数验证失败: "+err.Error())
+		return
+	}
+
+	updates := map[string]interface{}{}
+	if req.Name != "" {
+		updates["name"] = req.Name
+	}
+	if req.Host != "" {
+		updates["host"] = req.Host
+	}
+	if req.Port > 0 {
+		updates["port"] = req.Port
+	}
+	if req.Username != "" {
+		updates["username"] = req.Username
+	}
+	if req.Password != "" {
+		passwordEncrypted, err := r.encryptor.Encrypt(req.Password)
+		if err != nil {
+			r.logger.Error("failed to encrypt password", zap.Error(err))
+			utils.InternalError(c, "加密密码失败")
+			return
+		}
+		updates["password_encrypted"] = passwordEncrypted
+	}
+	if req.Database != "" {
+		updates["database"] = req.Database
+	}
+	if req.SSLMode != "" {
+		updates["ssl_mode"] = req.SSLMode
+	}
+	if req.Status != 0 {
+		updates["status"] = req.Status
+	}
+
+	if len(updates) > 0 {
+		if err := r.db.Model(&config).Updates(updates).Error; err != nil {
+			r.logger.Error("failed to update TiDB config", zap.Error(err))
+			utils.InternalError(c, "更新失败")
+			return
+		}
+	}
+
 	c.JSON(200, gin.H{"code": 0, "message": "updated"})
 }
 
 func (r *Router) deleteTiDBConfig(c *gin.Context) {
-	// TODO: 实现删除TiDB配置
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "无效的ID")
+		return
+	}
+
+	result := r.db.Delete(&models.TiDBConfig{}, id)
+	if result.Error != nil {
+		r.logger.Error("failed to delete TiDB config", zap.Error(result.Error))
+		utils.InternalError(c, "删除失败")
+		return
+	}
+	if result.RowsAffected == 0 {
+		utils.NotFound(c, "配置不存在")
+		return
+	}
+
 	c.JSON(200, gin.H{"code": 0, "message": "deleted"})
 }
 
 func (r *Router) listS3Configs(c *gin.Context) {
-	// TODO: 实现S3配置列表
-	c.JSON(200, gin.H{"code": 0, "data": gin.H{"total": 0, "items": []interface{}{}}})
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	var total int64
+	var configs []models.S3Config
+
+	// 统计总数
+	if err := r.db.Model(&models.S3Config{}).Count(&total).Error; err != nil {
+		r.logger.Error("failed to count S3 configs", zap.Error(err))
+		utils.InternalError(c, "查询失败")
+		return
+	}
+
+	// 分页查询
+	offset := (page - 1) * pageSize
+	if err := r.db.Order("id DESC").Offset(offset).Limit(pageSize).Find(&configs).Error; err != nil {
+		r.logger.Error("failed to list S3 configs", zap.Error(err))
+		utils.InternalError(c, "查询失败")
+		return
+	}
+
+	c.JSON(200, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"total": total,
+			"items": configs,
+		},
+	})
+}
+
+type createS3ConfigRequest struct {
+	TenantID    int64  `json:"tenant_id" binding:"required"`
+	Name        string `json:"name" binding:"required"`
+	Endpoint    string `json:"endpoint" binding:"required"`
+	Bucket      string `json:"bucket" binding:"required"`
+	Region      string `json:"region"`
+	AccessKeyID string `json:"access_key_id" binding:"required"`
+	SecretKey   string `json:"secret_access_key" binding:"required"`
+	PathPrefix  string `json:"path_prefix"`
+	Status      int8   `json:"status"`
 }
 
 func (r *Router) createS3Config(c *gin.Context) {
-	// TODO: 实现创建S3配置
-	c.JSON(201, gin.H{"code": 0, "message": "created"})
+	var req createS3ConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数验证失败: "+err.Error())
+		return
+	}
+
+	// 设置默认值
+	if req.Status == 0 {
+		req.Status = 1
+	}
+
+	// 加密密钥
+	secretKeyEncrypted, err := r.encryptor.Encrypt(req.SecretKey)
+	if err != nil {
+		r.logger.Error("failed to encrypt secret key", zap.Error(err))
+		utils.InternalError(c, "加密密钥失败")
+		return
+	}
+
+	config := &models.S3Config{
+		TenantID:           req.TenantID,
+		Name:               req.Name,
+		Endpoint:           req.Endpoint,
+		AccessKey:          req.AccessKeyID,
+		SecretKeyEncrypted: secretKeyEncrypted,
+		Bucket:             req.Bucket,
+		Region:             req.Region,
+		PathPrefix:         req.PathPrefix,
+		Status:             req.Status,
+	}
+
+	if err := r.db.Create(config).Error; err != nil {
+		r.logger.Error("failed to create S3 config", zap.Error(err))
+		utils.InternalError(c, "创建失败")
+		return
+	}
+
+	c.JSON(201, gin.H{"code": 0, "message": "created", "data": gin.H{"id": config.ID}})
+}
+
+type updateS3ConfigRequest struct {
+	Name        string `json:"name"`
+	Endpoint    string `json:"endpoint"`
+	Bucket      string `json:"bucket"`
+	Region      string `json:"region"`
+	AccessKeyID string `json:"access_key_id"`
+	SecretKey   string `json:"secret_access_key"`
+	PathPrefix  string `json:"path_prefix"`
+	Status      int8   `json:"status"`
 }
 
 func (r *Router) updateS3Config(c *gin.Context) {
-	// TODO: 实现更新S3配置
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "无效的ID")
+		return
+	}
+
+	var config models.S3Config
+	if err := r.db.First(&config, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			utils.NotFound(c, "配置不存在")
+			return
+		}
+		utils.InternalError(c, "查询失败")
+		return
+	}
+
+	var req updateS3ConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数验证失败: "+err.Error())
+		return
+	}
+
+	updates := map[string]interface{}{}
+	if req.Name != "" {
+		updates["name"] = req.Name
+	}
+	if req.Endpoint != "" {
+		updates["endpoint"] = req.Endpoint
+	}
+	if req.Bucket != "" {
+		updates["bucket"] = req.Bucket
+	}
+	if req.Region != "" {
+		updates["region"] = req.Region
+	}
+	if req.AccessKeyID != "" {
+		updates["access_key"] = req.AccessKeyID
+	}
+	if req.SecretKey != "" {
+		secretKeyEncrypted, err := r.encryptor.Encrypt(req.SecretKey)
+		if err != nil {
+			r.logger.Error("failed to encrypt secret key", zap.Error(err))
+			utils.InternalError(c, "加密密钥失败")
+			return
+		}
+		updates["secret_key_encrypted"] = secretKeyEncrypted
+	}
+	if req.PathPrefix != "" {
+		updates["path_prefix"] = req.PathPrefix
+	}
+	if req.Status != 0 {
+		updates["status"] = req.Status
+	}
+
+	if len(updates) > 0 {
+		if err := r.db.Model(&config).Updates(updates).Error; err != nil {
+			r.logger.Error("failed to update S3 config", zap.Error(err))
+			utils.InternalError(c, "更新失败")
+			return
+		}
+	}
+
 	c.JSON(200, gin.H{"code": 0, "message": "updated"})
 }
 
 func (r *Router) deleteS3Config(c *gin.Context) {
-	// TODO: 实现删除S3配置
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.BadRequest(c, "无效的ID")
+		return
+	}
+
+	result := r.db.Delete(&models.S3Config{}, id)
+	if result.Error != nil {
+		r.logger.Error("failed to delete S3 config", zap.Error(result.Error))
+		utils.InternalError(c, "删除失败")
+		return
+	}
+	if result.RowsAffected == 0 {
+		utils.NotFound(c, "配置不存在")
+		return
+	}
+
 	c.JSON(200, gin.H{"code": 0, "message": "deleted"})
 }
 
