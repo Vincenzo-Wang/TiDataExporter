@@ -40,6 +40,9 @@ type ExportTask struct {
 	CanceledAt      *time.Time `gorm:"precision:0" json:"canceled_at"`
 	CreatedAt       time.Time  `gorm:"precision:0;index:idx_created_at" json:"created_at"`
 	UpdatedAt       time.Time  `gorm:"precision:0;autoUpdateTime" json:"updated_at"`
+
+	// 关联字段（不存储在数据库）
+	Tenant Tenant `gorm:"foreignKey:TenantID" json:"tenant,omitempty"`
 }
 
 func (ExportTask) TableName() string {

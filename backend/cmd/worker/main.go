@@ -7,12 +7,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"claw-export-platform/config"
 	"claw-export-platform/pkg/database"
 	"claw-export-platform/pkg/encryption"
 	"claw-export-platform/pkg/queue"
 	redispkg "claw-export-platform/pkg/redis"
+	"claw-export-platform/services/cleanup"
+	"claw-export-platform/services/s3"
+	"claw-export-platform/services/task"
 	"claw-export-platform/workers"
 
 	"go.uber.org/zap"
@@ -105,6 +109,34 @@ func main() {
 		logger.Named("worker-pool"),
 	)
 
+	// 创建上下文用于控制后台任务
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 创建并启动任务管理器（超时检查器）
+	taskManager := task.NewTaskManager(task.ManagerConfig{
+		DB:                   db,
+		Queue:                taskQueue,
+		Logger:               logger.Named("task-manager"),
+		TimeoutCheckInterval: time.Minute,   // 1分钟
+		TaskTimeout:          2 * time.Hour, // 2小时
+	})
+	go taskManager.StartTimeoutChecker(ctx)
+
+	// 创建S3客户端缓存（用于清理器）
+	s3Clients := make(map[int64]*s3.Client)
+	// 注意：实际使用时需要根据S3配置动态创建客户端
+
+	// 创建并启动文件清理器
+	cleaner := cleanup.NewCleaner(cleanup.CleanerConfig{
+		DB:            db,
+		S3Clients:     s3Clients,
+		Logger:        logger.Named("cleaner"),
+		CheckInterval: time.Hour,              // 1小时
+		LogRetention:  30 * 24 * time.Hour,    // 30天
+	})
+	go cleaner.Start(ctx)
+
 	// 启动Worker池
 	logger.Info("starting worker pool", zap.Int("workers", *workerCount))
 	workerPool.Start()
@@ -116,7 +148,8 @@ func main() {
 	sig := <-sigCh
 	logger.Info("received shutdown signal", zap.String("signal", sig.String()))
 
-	// 优雅关闭
+	// 优雅关闭（先取消后台任务）
+	cancel()
 	workerPool.Stop()
 	logger.Info("worker shutdown complete")
 }

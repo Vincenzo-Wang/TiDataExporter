@@ -11,6 +11,7 @@ import (
 	"claw-export-platform/pkg/encryption"
 	"claw-export-platform/pkg/queue"
 	"claw-export-platform/services/export"
+	"claw-export-platform/services/s3"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -252,7 +253,7 @@ func (h *ExportHandler) BatchQuery(c *gin.Context) {
 	utils.Success(c, results)
 }
 
-// GetFile 文件下载代理
+// GetFile 文件下载代理（使用预签名URL）
 func (h *ExportHandler) GetFile(c *gin.Context) {
 	tenantID := c.GetInt64(string(middleware.ContextKeyTenantID))
 	taskID := c.Param("task_id")
@@ -274,8 +275,58 @@ func (h *ExportHandler) GetFile(c *gin.Context) {
 		return
 	}
 
-	// 重定向到S3
-	c.Redirect(http.StatusFound, task.FileURL)
+	// 获取S3配置
+	var s3Config models.S3Config
+	if err := h.db.First(&s3Config, task.S3ConfigID).Error; err != nil {
+		h.logger.Error("failed to get s3 config", zap.Error(err))
+		utils.InternalError(c, "获取S3配置失败")
+		return
+	}
+
+	// 解密SecretKey
+	secretKey, err := h.encryptor.Decrypt(s3Config.SecretKeyEncrypted)
+	if err != nil {
+		h.logger.Error("failed to decrypt s3 secret key", zap.Error(err))
+		utils.InternalError(c, "解密S3密钥失败")
+		return
+	}
+
+	// 创建S3客户端
+	s3Client, err := s3.NewClient(c.Request.Context(), s3.Config{
+		Endpoint:   s3Config.Endpoint,
+		AccessKey:  s3Config.AccessKey,
+		SecretKey:  secretKey,
+		Bucket:     s3Config.Bucket,
+		Region:     s3Config.Region,
+		PathPrefix: s3Config.PathPrefix,
+	})
+	if err != nil {
+		h.logger.Error("failed to create s3 client", zap.Error(err))
+		utils.InternalError(c, "创建S3客户端失败")
+		return
+	}
+
+	// 计算预签名URL有效期（使用文件的剩余有效期，至少1小时）
+	expiresIn := time.Hour
+	if task.ExpiresAt != nil {
+		remaining := time.Until(*task.ExpiresAt)
+		if remaining > time.Hour {
+			expiresIn = remaining
+		} else if remaining > 0 {
+			expiresIn = remaining
+		}
+	}
+
+	// 生成预签名URL
+	presignedURL, err := s3Client.GetPresignedURL(c.Request.Context(), task.FileURL, expiresIn)
+	if err != nil {
+		h.logger.Error("failed to generate presigned url", zap.Error(err))
+		utils.InternalError(c, "生成下载链接失败")
+		return
+	}
+
+	// 重定向到预签名URL
+	c.Redirect(http.StatusFound, presignedURL)
 }
 
 // AdminHandler 管理API处理器

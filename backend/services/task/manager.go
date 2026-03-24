@@ -3,7 +3,9 @@ package task
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"claw-export-platform/models"
@@ -188,9 +190,29 @@ func (m *TaskManager) cancelRunningTask(ctx context.Context, task *models.Export
 
 // terminateProcess 终止进程
 func (m *TaskManager) terminateProcess(pid int) error {
-	// 这里使用简化的进程终止逻辑
-	// 实际实现可以使用 os.FindProcess 和 Process.Signal
-	// 也可以使用 exec.Command("kill", "-TERM", strconv.Itoa(pid))
+	if pid <= 0 {
+		return fmt.Errorf("invalid pid: %d", pid)
+	}
+
+	// 查找进程
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("failed to find process: %w", err)
+	}
+
+	// 首先尝试优雅终止 (SIGTERM)
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		m.logger.Warn("failed to send SIGTERM, trying SIGKILL",
+			zap.Int("pid", pid),
+			zap.Error(err),
+		)
+		// 如果 SIGTERM 失败，尝试强制终止
+		if err := process.Signal(syscall.SIGKILL); err != nil {
+			return fmt.Errorf("failed to kill process: %w", err)
+		}
+	}
+
+	m.logger.Info("process terminated", zap.Int("pid", pid))
 	return nil
 }
 
