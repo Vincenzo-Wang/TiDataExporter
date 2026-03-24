@@ -1,5 +1,4 @@
-version: '3.8'
-
+version: '3'
 services:
   # MySQL Database
   mysql:
@@ -32,8 +31,9 @@ services:
       - redis_data:/data
     ports:
       - "${REDIS_PORT:-6379}:6379"
+    # 注意：healthcheck 中的密码需与 REDIS_PASSWORD 保持一致
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "redis123", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -46,10 +46,8 @@ services:
     container_name: claw-backend
     restart: unless-stopped
     depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - mysql
+      - redis
     environment:
       - APP_ENV=${APP_ENV:-production}
       - APP_PORT=${APP_PORT:-8080}
@@ -105,10 +103,8 @@ services:
     container_name: claw-worker
     restart: unless-stopped
     depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - mysql
+      - redis
     environment:
       - APP_ENV=${APP_ENV:-production}
       - DB_HOST=mysql
@@ -124,7 +120,7 @@ services:
     volumes:
       - ${HOST_DUMPLING_PATH:-/usr/local/bin/dumpling}:/usr/local/bin/dumpling:ro
       - tmp_data:/tmp/exports
-    user: "0:0"  # Run as root for volume access
+    user: "0:0"
 
 volumes:
   mysql_data:
@@ -133,7 +129,3 @@ volumes:
     driver: local
   tmp_data:
     driver: local
-
-networks:
-  default:
-    name: claw-network

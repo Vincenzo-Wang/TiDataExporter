@@ -186,6 +186,15 @@ start_services() {
     # 停止旧容器
     compose_cmd down --remove-orphans 2>/dev/null || true
     
+    # 创建网络（如果不存在）
+    log_info "检查 Docker 网络..."
+    if ! docker_cmd network inspect claw-network &> /dev/null; then
+        log_info "创建 Docker 网络 claw-network..."
+        docker_cmd network create claw-network
+    else
+        log_info "Docker 网络 claw-network 已存在"
+    fi
+    
     # 启动 MySQL
     log_info "启动 MySQL..."
     compose_cmd up -d mysql

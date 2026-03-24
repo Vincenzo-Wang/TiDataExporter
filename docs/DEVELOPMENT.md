@@ -26,7 +26,7 @@
 #### Docker 部署（推荐）
 
 - Docker 20.10+
-- Docker Compose 2.0+
+- Docker Compose 1.18.0+（兼容旧版本）
 
 #### 开发环境
 
@@ -67,7 +67,7 @@ REDIS_PORT=6379                 # Redis 端口
 # 安全配置（生产环境必须修改！）
 # ============================================
 # JWT 密钥：至少 32 个字符的随机字符串
-JWT_SECRET=your-super-secret-jwt-key-change-in-production-min-32-chars
+JWT_SECRET=your-super-secret-jwt-key-change-in-production
 
 # AES 加密密钥：必须是正好 32 字节的字符串
 # 注意：长度必须正好 32 字节（用于 AES-256 加密）
@@ -81,6 +81,11 @@ FRONTEND_PORT=80                # 前端服务端口
 BACKEND_PORT=8080               # 后端 API 端口
 
 # ============================================
+# Worker 配置
+# ============================================
+WORKER_COUNT=4                  # Worker 并发数
+
+# ============================================
 # S3 存储配置（可选，租户可自行配置）
 # ============================================
 S3_ACCESS_KEY=                  # Access Key ID
@@ -90,76 +95,14 @@ S3_REGION=us-east-1             # S3 Region
 S3_BUCKET=                      # 默认 Bucket 名称
 
 # ============================================
+# Dumpling 配置
+# ============================================
+HOST_DUMPLING_PATH=/usr/local/bin/dumpling  # Dumpling 可执行文件路径（宿主机）
+
+# ============================================
 # 日志配置
 # ============================================
 LOG_LEVEL=info                  # 日志级别：debug/info/warn/error
-```
-
-### 后端配置文件 (config/config.yaml)
-
-```yaml
-# 应用配置
-app:
-  env: production              # 环境
-  port: 8080                   # 服务端口
-  name: claw-export-platform   # 应用名称
-
-# 数据库配置
-database:
-  host: ${DB_HOST:localhost}   # 支持环境变量覆盖
-  port: ${DB_PORT:3306}
-  user: ${DB_USER:claw}
-  password: ${DB_PASSWORD:claw123}
-  name: ${DB_NAME:claw_export}
-  max_open_conns: 100          # 最大连接数
-  max_idle_conns: 10           # 最大空闲连接
-  conn_max_lifetime: 3600      # 连接最大生命周期（秒）
-
-# Redis 配置
-redis:
-  host: ${REDIS_HOST:localhost}
-  port: ${REDIS_PORT:6379}
-  password: ${REDIS_PASSWORD:}
-  db: 0
-  pool_size: 100
-
-# 安全配置
-security:
-  jwt_secret: ${JWT_SECRET}    # JWT 密钥
-  encryption_key: ${ENCRYPTION_KEY}  # 加密密钥
-  token_expire_hour: 24        # Token 有效期（小时）
-  refresh_token_expire_hour: 168  # 刷新 Token 有效期
-
-# Dumpling 配置
-dumpling:
-  path: /usr/local/bin/dumpling  # Dumpling 可执行文件路径
-  default_threads: 4             # 默认线程数
-  default_file_size: "256MiB"    # 默认文件大小
-  default_rows: 100000           # 默认行数限制
-  timeout: 3600                  # 超时时间（秒）
-
-# Worker 配置
-worker:
-  pool_size: 10                # Worker 池大小
-  queue_size: 1000             # 任务队列大小
-  max_retry: 3                 # 最大重试次数
-  retry_delay: 60              # 重试延迟（秒）
-
-# 清理任务配置
-cleanup:
-  enabled: true                # 是否启用清理任务
-  schedule: "0 2 * * *"        # Cron 表达式：每天凌晨 2 点执行
-  retention_days: 7            # 文件保留天数
-
-# 日志配置
-log:
-  level: ${LOG_LEVEL:info}
-  format: json                 # 日志格式：json/text
-  output: stdout               # 输出位置：stdout/file
-  file: logs/app.log           # 日志文件路径（output=file 时生效）
-  max_size: 100                # 单文件最大大小（MB）
-  max_backups: 10              # 最大保留文件数
-  max_age: 30                  # 最大保留天数
 ```
 
 ### 前端配置 (frontend/.env)
@@ -218,6 +161,20 @@ curl -X POST http://localhost:8080/api/v1/admin/auth/login \
   -d '{"username":"admin","password":"admin123"}'
 ```
 
+#### 服务架构
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Claw Export Platform                        │
+├─────────────────────────────────────────────────────────────────┤
+│  claw-mysql      MySQL 8.0       数据存储         Port: 3306    │
+│  claw-redis      Redis 7         缓存/队列        Port: 6379    │
+│  claw-backend    Go Backend      API 服务         Port: 8080    │
+│  claw-frontend   Nginx           前端静态文件      Port: 80      │
+│  claw-worker     Go Worker       任务执行器       (内部通信)     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 #### 重新初始化数据库
 
 如果需要重新初始化数据库（会删除所有数据）：
@@ -252,7 +209,10 @@ docker-compose up -d backend
 # 5. 启动前端
 docker-compose up -d frontend
 
-# 6. 检查服务
+# 6. 启动 Worker
+docker-compose up -d worker
+
+# 7. 检查服务
 docker-compose ps
 ```
 
@@ -344,6 +304,9 @@ go mod download
 
 # 构建 Linux 可执行文件
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o claw-export cmd/server/main.go
+
+# 构建 Worker
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o claw-worker cmd/worker/main.go
 ```
 
 #### 2. Systemd 服务配置
@@ -371,11 +334,42 @@ Environment=DB_HOST=localhost
 Environment=DB_PORT=3306
 Environment=DB_USER=claw
 Environment=DB_PASSWORD=your-password
-Environment=REDIS_HOST=localhost
-Environment=REDIS_PORT=6379
+Environment=REDIS_ADDR=localhost:6379
 Environment=REDIS_PASSWORD=your-redis-password
 Environment=JWT_SECRET=your-jwt-secret
-Environment=ENCRYPTION_KEY=your-encryption-key
+Environment=AES_KEY=your-32-byte-aes-key-here!!!!!!
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+# /etc/systemd/system/claw-worker.service
+[Unit]
+Description=Claw Export Platform Worker
+After=network.target mysql.service redis.service
+
+[Service]
+Type=simple
+User=claw
+Group=claw
+WorkingDirectory=/opt/claw-export
+ExecStart=/opt/claw-export/claw-worker
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# 环境变量（同 backend）
+Environment=APP_ENV=production
+Environment=DB_HOST=localhost
+Environment=DB_PORT=3306
+Environment=DB_USER=claw
+Environment=DB_PASSWORD=your-password
+Environment=REDIS_ADDR=localhost:6379
+Environment=REDIS_PASSWORD=your-redis-password
+Environment=AES_KEY=your-32-byte-aes-key-here!!!!!!
+Environment=WORKER_COUNT=4
 
 [Install]
 WantedBy=multi-user.target
@@ -384,14 +378,16 @@ WantedBy=multi-user.target
 ```bash
 # 启用服务
 sudo systemctl daemon-reload
-sudo systemctl enable claw-export
-sudo systemctl start claw-export
+sudo systemctl enable claw-export claw-worker
+sudo systemctl start claw-export claw-worker
 
 # 查看状态
 sudo systemctl status claw-export
+sudo systemctl status claw-worker
 
 # 查看日志
 sudo journalctl -u claw-export -f
+sudo journalctl -u claw-worker -f
 ```
 
 #### 3. Kubernetes 部署
@@ -426,6 +422,11 @@ spec:
             secretKeyRef:
               name: claw-export-secrets
               key: db-host
+        - name: AES_KEY
+          valueFrom:
+            secretKeyRef:
+              name: claw-export-secrets
+              key: aes-key
         # ... 其他环境变量
         resources:
           requests:
@@ -446,6 +447,29 @@ spec:
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claw-export-worker
+  namespace: claw-export
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: claw-export-worker
+  template:
+    metadata:
+      labels:
+        app: claw-export-worker
+    spec:
+      containers:
+      - name: worker
+        image: claw-export-worker:latest
+        env:
+        - name: WORKER_COUNT
+          value: "4"
+        # ... 其他环境变量
 ---
 apiVersion: v1
 kind: Service
@@ -484,6 +508,9 @@ docker-compose logs -f backend --tail=100
 # 查看前端日志
 docker-compose logs -f frontend --tail=100
 
+# 查看 Worker 日志
+docker-compose logs -f worker --tail=100
+
 # 导出日志
 docker-compose logs backend > backend.log
 ```
@@ -502,8 +529,8 @@ scrape_configs:
 ### 扩容缩容
 
 ```bash
-# 增加 Worker 数量（修改 docker-compose.yml 中的 worker.pool_size）
-docker-compose up -d --force-recreate backend
+# 增加 Worker 并发数（修改 .env 中的 WORKER_COUNT）
+docker-compose up -d worker
 
 # 水平扩展前端
 docker-compose up -d --scale frontend=3
@@ -603,6 +630,23 @@ go version
 # FROM golang:1.25-alpine AS builder
 ```
 
+#### 8. 任务一直处于"待处理"状态
+
+**原因**：Worker 服务未启动或异常
+
+**解决方案**：
+
+```bash
+# 检查 Worker 状态
+docker-compose ps worker
+
+# 查看 Worker 日志
+docker-compose logs worker --tail=100
+
+# 重启 Worker
+docker-compose restart worker
+```
+
 ---
 
 ## 更新升级
@@ -614,7 +658,7 @@ go version
 git pull origin main
 
 # 2. 备份数据
-./scripts/backup.sh
+./deploy.sh backup
 
 # 3. 重新构建
 docker-compose build
@@ -634,11 +678,13 @@ curl http://localhost:8080/health
 
 ```
 backend/migrations/
-├── init.sh                    # 自动初始化脚本（Docker 用）
+├── init.sh                           # 自动初始化脚本（Docker 用）
 ├── up/
-│   └── 000001_init_schema.up.sql  # 初始化表结构 SQL
+│   ├── 000001_init_schema.up.sql     # 初始化表结构 SQL
+│   └── 000002_drop_foreign_keys.up.sql  # 删除外键约束（可选）
 └── down/
-    └── 000001_init_schema.down.sql  # 回滚脚本
+    ├── 000001_init_schema.down.sql   # 回滚脚本
+    └── 000002_drop_foreign_keys.down.sql  # 回滚外键删除
 ```
 
 #### 手动执行迁移
@@ -656,7 +702,7 @@ docker exec -i claw-mysql mysql -uroot -proot123 claw_export < backend/migration
 1. 创建新的迁移文件：
 
 ```bash
-# backend/migrations/up/000002_add_new_table.up.sql
+# backend/migrations/up/000003_add_new_table.up.sql
 CREATE TABLE IF NOT EXISTS new_table (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     -- ...
@@ -700,6 +746,21 @@ ufw allow 80/tcp
 ufw allow 443/tcp
 ufw enable
 ```
+
+---
+
+## Docker Compose 兼容性说明
+
+项目兼容 Docker Compose 1.18.0+，主要注意事项：
+
+| 特性 | 版本要求 | 说明 |
+|------|----------|------|
+| `version: '3'` | 1.10+ | 使用基础版本确保兼容性 |
+| `healthcheck` | 1.10+ | 支持健康检查 |
+| `depends_on` | 所有版本 | 仅表示启动顺序，不等待健康状态 |
+| `volumes` | 所有版本 | 命名卷和绑定挂载均支持 |
+
+> **注意**：由于旧版本 `depends_on` 不支持 `condition: service_healthy`，服务启动顺序由 `deploy.sh` 脚本中的等待逻辑保证。
 
 ---
 
