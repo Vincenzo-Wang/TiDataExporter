@@ -125,8 +125,12 @@ type ExecutionResult struct {
 }
 
 func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password, sqlText, filetype, compress, outputFile, workDir string) *exec.Cmd {
+	dumplingPath := strings.TrimSpace(os.Getenv("DUMPLING_PATH"))
+	if dumplingPath == "" {
+		dumplingPath = "/usr/local/bin/dumpling"
+	}
+
 	args := []string{
-		"dumpling",
 		fmt.Sprintf("--host=%s", tidbConfig.Host),
 		fmt.Sprintf("--port=%d", tidbConfig.Port),
 		fmt.Sprintf("--user=%s", tidbConfig.Username),
@@ -158,7 +162,7 @@ func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password,
 		"--consistency=auto",
 	)
 
-	return exec.Command("tiup", args...)
+	return exec.Command(dumplingPath, args...)
 }
 
 func (e *Executor) logTaskError(ctx context.Context, taskID int64, output string, err error) {
