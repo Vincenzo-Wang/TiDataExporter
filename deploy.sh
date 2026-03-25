@@ -170,6 +170,38 @@ create_directories() {
     log_success "目录创建完成"
 }
 
+# 执行数据库迁移
+run_migrations() {
+    log_info "执行数据库迁移..."
+    
+    # 检查迁移文件目录
+    MIGRATIONS_DIR="backend/migrations/up"
+    if [ ! -d "$MIGRATIONS_DIR" ]; then
+        log_warning "迁移目录不存在，跳过迁移"
+        return 0
+    fi
+    
+    # 按顺序执行迁移文件
+    for migration_file in $(ls "$MIGRATIONS_DIR"/*.up.sql 2>/dev/null | sort); do
+        filename=$(basename "$migration_file")
+        log_info "执行迁移: $filename"
+        
+        # 执行迁移（忽略"字段已存在"等非致命错误）
+        compose_cmd exec -T mysql mysql -u root -p"${MYSQL_ROOT_PASSWORD:-root123}" "${MYSQL_DATABASE:-claw}" < "$migration_file" 2>&1 | while read -r line; do
+            # 忽略非致命错误
+            if echo "$line" | grep -qE "(Duplicate column|Duplicate key name|already exists)"; then
+                log_info "跳过已存在的字段/索引"
+            elif [ -n "$line" ]; then
+                echo "$line"
+            fi
+        done
+        
+        log_success "迁移完成: $filename"
+    done
+    
+    log_success "数据库迁移完成"
+}
+
 # 构建镜像
 build_images() {
     log_info "构建 Docker 镜像..."
@@ -207,6 +239,9 @@ start_services() {
         sleep 5
     done
     log_success "MySQL 已就绪"
+    
+    # 执行数据库迁移
+    run_migrations
     
     # 启动 Redis
     log_info "启动 Redis..."
@@ -304,6 +339,7 @@ show_help() {
     echo "  status      查看服务状态"
     echo "  logs        查看日志"
     echo "  build       构建镜像"
+    echo "  migrate     执行数据库迁移"
     echo "  clean       清理所有容器和卷"
     echo "  backup      备份数据库"
     echo "  help        显示帮助信息"
@@ -392,6 +428,11 @@ main() {
         build)
             check_environment
             build_images
+            ;;
+        migrate)
+            check_environment
+            detect_docker_mode
+            run_migrations
             ;;
         clean)
             detect_docker_mode
