@@ -19,7 +19,8 @@ RUN go mod tidy && \
 # Final stage
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates tzdata dumb-init
+# 安装 glibc 兼容层（dumpling 需要 glibc）
+RUN apk --no-cache add ca-certificates tzdata dumb-init gcompat
 
 WORKDIR /app
 
