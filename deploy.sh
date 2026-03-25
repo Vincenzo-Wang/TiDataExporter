@@ -53,19 +53,18 @@ docker_cmd() {
 
 # 执行 compose 命令（兼容 docker-compose 和 docker compose）
 compose_cmd() {
-    # 使用 --env-file 确保环境变量被读取（兼容旧版 docker-compose）
-    local env_file_args=""
-    if [ -f ".env" ]; then
-        env_file_args="--env-file .env"
-    fi
-    
     if [ "$COMPOSE_COMMAND" = "docker-compose" ]; then
         if [ "$USE_SUDO_DOCKER" -eq 1 ]; then
-            sudo docker-compose $env_file_args "$@"
+            sudo docker-compose "$@"
         else
-            docker-compose $env_file_args "$@"
+            docker-compose "$@"
         fi
     else
+        # docker compose (v2) 支持 --env-file
+        local env_file_args=""
+        if [ -f ".env" ]; then
+            env_file_args="--env-file .env"
+        fi
         docker_cmd compose $env_file_args "$@"
     fi
 }
