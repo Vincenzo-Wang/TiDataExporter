@@ -160,11 +160,54 @@ func (h *ExportHandler) GetTask(c *gin.Context) {
 		return
 	}
 
+	// 生成完整的 file_url（预签名URL）
+	var fileURL string
+	if task.FileURL != "" && task.Status == models.TaskStatusSuccess {
+		// 获取S3配置
+		var s3Config models.S3Config
+		if err := h.db.First(&s3Config, task.S3ConfigID).Error; err == nil {
+			// 解密SecretKey
+			if secretKey, err := h.encryptor.Decrypt(s3Config.SecretKeyEncrypted); err == nil {
+				// 创建S3客户端
+				if s3Client, err := s3.NewStorageClient(c.Request.Context(), s3.Config{
+					Provider:   string(s3Config.Provider),
+					Endpoint:   s3Config.Endpoint,
+					AccessKey:  s3Config.AccessKey,
+					SecretKey:  secretKey,
+					Bucket:     s3Config.Bucket,
+					Region:     s3Config.Region,
+					PathPrefix: s3Config.PathPrefix,
+				}); err == nil {
+					// 计算预签名URL有效期（使用文件的剩余有效期，至少1小时）
+					expiresIn := time.Hour
+					if task.ExpiresAt != nil {
+						remaining := time.Until(*task.ExpiresAt)
+						if remaining > time.Hour {
+							expiresIn = remaining
+						} else if remaining > 0 {
+							expiresIn = remaining
+						}
+					}
+					// 生成预签名URL
+					if presignedURL, err := s3Client.GetPresignedURL(c.Request.Context(), task.FileURL, expiresIn); err == nil {
+						fileURL = presignedURL
+					}
+				}
+			}
+		}
+		// 如果生成失败，使用原始路径（向后兼容）
+		if fileURL == "" {
+			fileURL = task.FileURL
+		}
+	} else if task.FileURL != "" {
+		fileURL = task.FileURL
+	}
+
 	data := gin.H{
 		"task_id":       task.ID,
 		"task_name":     task.TaskName,
 		"status":        task.Status,
-		"file_url":      task.FileURL,
+		"file_url":      fileURL,
 		"file_size":     task.FileSize,
 		"row_count":     task.RowCount,
 		"error_message": task.ErrorMessage,
