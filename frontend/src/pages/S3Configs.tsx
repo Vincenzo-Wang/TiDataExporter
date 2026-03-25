@@ -45,8 +45,9 @@ export default function S3Configs() {
   const handleEdit = (config: S3Config) => {
     setEditingConfig(config);
     form.setFieldsValue({
+      tenant_id: config.tenant_id,
       name: config.name,
-      provider: config.provider,
+      provider: config.provider || 'aws',
       endpoint: config.endpoint,
       bucket: config.bucket,
       region: config.region,

@@ -220,9 +220,14 @@ run_migrations() {
         filename=$(basename "$migration_file")
         log_info "执行迁移: $filename"
         
-        # 执行迁移
+        # 执行迁移 (使用管道方式，兼容 sudo)
         set +e
-        compose_cmd exec -T mysql mysql -u root -p"${MYSQL_ROOT_PASSWORD:-root123}" "${MYSQL_DATABASE:-claw_export}" < "$migration_file" 2>&1
+        if [ "$USE_SUDO_DOCKER" -eq 1 ]; then
+            # sudo 需要使用管道方式传递文件内容
+            sudo docker exec -i claw-mysql mysql -u root -p"${MYSQL_ROOT_PASSWORD:-root123}" "${MYSQL_DATABASE:-claw_export}" < "$migration_file" 2>&1
+        else
+            compose_cmd exec -T mysql mysql -u root -p"${MYSQL_ROOT_PASSWORD:-root123}" "${MYSQL_DATABASE:-claw_export}" < "$migration_file" 2>&1
+        fi
         result=$?
         set -e
         
