@@ -160,8 +160,19 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 			contentType = "text/csv"
 		}
 
-		// 使用实际文件名作为 S3 key
-		actualS3Key := fmt.Sprintf("exports/%d/%s", taskID, filepath.Base(outputFile))
+		// 使用简化的 S3 key（避免 OSS 对特殊文件名的限制）
+		// dumpling 生成的文件名如 result.000000000.csv.gz 可能触发 InvalidObjectName 错误
+		ext := filepath.Ext(outputFile)
+		if compress != "" && !strings.HasSuffix(ext, "."+compress) {
+			// 如果文件是压缩的，确保扩展名正确
+			ext = "." + filetype + "." + compress
+		} else if ext == "" {
+			ext = "." + filetype
+			if compress != "" {
+				ext += "." + compress
+			}
+		}
+		actualS3Key := fmt.Sprintf("exports/%d/output%s", taskID, ext)
 		if err := s3Client.Upload(ctx, actualS3Key, file, fileSize, contentType); err != nil {
 			return nil, fmt.Errorf("failed to upload to s3: %w", err)
 		}
