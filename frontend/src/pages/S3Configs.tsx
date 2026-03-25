@@ -285,8 +285,12 @@ export default function S3Configs() {
           >
             <Input.Password placeholder="请输入 Secret Access Key" />
           </Form.Item>
-          <Form.Item name="path_prefix" label="路径前缀">
-            <Input placeholder="exports/" />
+          <Form.Item 
+            name="path_prefix" 
+            label="路径前缀"
+            extra="文件在OSS中的存储路径前缀，不需要末尾斜杠。例如：myapp 或 myapp/exports"
+          >
+            <Input placeholder="myapp 或 myapp/subdir（无需末尾斜杠）" />
           </Form.Item>
           <Form.Item name="status" label="状态" initialValue={1}>
             <Select

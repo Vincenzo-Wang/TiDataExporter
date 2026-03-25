@@ -451,6 +451,7 @@ main() {
             ;;
         restart)
             check_environment
+            check_config
             stop_services
             start_services
             health_check

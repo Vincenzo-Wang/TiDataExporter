@@ -1155,9 +1155,8 @@ func (r *Router) updateS3Config(c *gin.Context) {
 		}
 		updates["secret_key_encrypted"] = secretKeyEncrypted
 	}
-	if req.PathPrefix != "" {
-		updates["path_prefix"] = req.PathPrefix
-	}
+	// PathPrefix 允许设置为空（用于清空前缀）
+	updates["path_prefix"] = req.PathPrefix
 	if req.Status != 0 {
 		updates["status"] = req.Status
 	}
