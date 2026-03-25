@@ -55,7 +55,8 @@ docker_cmd() {
 compose_cmd() {
     if [ "$COMPOSE_COMMAND" = "docker-compose" ]; then
         if [ "$USE_SUDO_DOCKER" -eq 1 ]; then
-            sudo docker-compose "$@"
+            # sudo 会重置环境变量，需要显式传递 HOST_DUMPLING_PATH
+            sudo HOST_DUMPLING_PATH="$HOST_DUMPLING_PATH" docker-compose "$@"
         else
             docker-compose "$@"
         fi
