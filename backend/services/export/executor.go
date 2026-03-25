@@ -52,15 +52,14 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 	}
 	defer os.RemoveAll(taskDir) // 清理临时目录
 
-	// 构建输出文件名
-	outputFile := filepath.Join(taskDir, fmt.Sprintf("output.%s", filetype))
+	// 构建S3 key
 	s3Key := fmt.Sprintf("exports/%d/output.%s", taskID, filetype)
 	if compress != "" {
 		s3Key += "." + compress
 	}
 
-	// 构建Dumpling命令
-	cmd := e.buildDumplingCommand(tidbConfig, password, sqlText, filetype, compress, outputFile, taskDir)
+	// 构建Dumpling命令 - output 是目录，不是文件
+	cmd := e.buildDumplingCommand(tidbConfig, password, sqlText, filetype, compress, taskDir)
 
 	e.logger.Info("executing dumpling",
 		zap.Int64("task_id", taskID),
@@ -74,10 +73,55 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 	output, err := cmd.CombinedOutput()
 	duration := time.Since(startTime)
 
+	// 记录 dumpling 输出（用于调试）
+	e.logger.Info("dumpling output",
+		zap.Int64("task_id", taskID),
+		zap.String("output", string(output)),
+	)
+
 	if err != nil {
 		e.logTaskError(ctx, taskID, string(output), err)
 		return nil, fmt.Errorf("dumpling failed: %w, output: %s", err, string(output))
 	}
+
+	// dumpling 输出到目录，需要查找实际的输出文件
+	// dumpling 的文件命名格式: {database}.{table}.{filetype} 或类似格式
+	files, err := filepath.Glob(filepath.Join(taskDir, "*."+filetype))
+	if err != nil {
+		return nil, fmt.Errorf("failed to find output files: %w", err)
+	}
+
+	// 如果没找到 .csv/.sql 文件，尝试查找压缩文件
+	if len(files) == 0 && compress != "" {
+		files, err = filepath.Glob(filepath.Join(taskDir, "*."+filetype+"."+compress))
+		if err != nil {
+			return nil, fmt.Errorf("failed to find compressed output files: %w", err)
+		}
+	}
+
+	// 如果还是没找到，列出目录中所有文件
+	if len(files) == 0 {
+		entries, listErr := os.ReadDir(taskDir)
+		if listErr != nil {
+			return nil, fmt.Errorf("no output files found, failed to list directory: %w", listErr)
+		}
+		for _, entry := range entries {
+			files = append(files, filepath.Join(taskDir, entry.Name()))
+		}
+	}
+
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no output files found in %s", taskDir)
+	}
+
+	// 如果只有一个文件，直接使用
+	// 如果有多个文件，目前只使用第一个（后续可以考虑打包）
+	outputFile := files[0]
+	e.logger.Info("found output file",
+		zap.Int64("task_id", taskID),
+		zap.String("file", outputFile),
+		zap.Int("total_files", len(files)),
+	)
 
 	// 获取输出文件信息
 	fileInfo, err := os.Stat(outputFile)
@@ -99,9 +143,12 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 			contentType = "text/csv"
 		}
 
-		if err := e.s3Client.Upload(ctx, s3Key, file, fileSize, contentType); err != nil {
+		// 使用实际文件名作为 S3 key
+		actualS3Key := fmt.Sprintf("exports/%d/%s", taskID, filepath.Base(outputFile))
+		if err := e.s3Client.Upload(ctx, actualS3Key, file, fileSize, contentType); err != nil {
 			return nil, fmt.Errorf("failed to upload to s3: %w", err)
 		}
+		s3Key = actualS3Key
 	}
 
 	e.logger.Info("export completed",
@@ -124,7 +171,7 @@ type ExecutionResult struct {
 	Duration time.Duration
 }
 
-func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password, sqlText, filetype, compress, outputFile, workDir string) *exec.Cmd {
+func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password, sqlText, filetype, compress, outputDir string) *exec.Cmd {
 	dumplingPath := strings.TrimSpace(os.Getenv("DUMPLING_PATH"))
 	if dumplingPath == "" {
 		dumplingPath = "/usr/local/bin/dumpling"
@@ -135,7 +182,7 @@ func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password,
 		fmt.Sprintf("--port=%d", tidbConfig.Port),
 		fmt.Sprintf("--user=%s", tidbConfig.Username),
 		fmt.Sprintf("--password=%s", password),
-		fmt.Sprintf("--output=%s", workDir),
+		fmt.Sprintf("--output=%s", outputDir),
 		fmt.Sprintf("--sql=%s", sqlText),
 	}
 
