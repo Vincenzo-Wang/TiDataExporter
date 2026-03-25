@@ -222,7 +222,7 @@ run_migrations() {
         
         # 执行迁移
         set +e
-        compose_cmd exec -T mysql mysql -u root -p"${MYSQL_ROOT_PASSWORD:-root123}" "${MYSQL_DATABASE:-claw}" < "$migration_file" 2>&1
+        compose_cmd exec -T mysql mysql -u root -p"${MYSQL_ROOT_PASSWORD:-root123}" "${MYSQL_DATABASE:-claw_export}" < "$migration_file" 2>&1
         result=$?
         set -e
         
