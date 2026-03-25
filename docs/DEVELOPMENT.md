@@ -34,6 +34,7 @@
 - Node.js 18+
 - MySQL 8.0+
 - Redis 7+
+- Dumpling（TiUP 安装）
 
 ---
 
@@ -97,7 +98,9 @@ S3_BUCKET=                      # 默认 Bucket 名称
 # ============================================
 # Dumpling 配置
 # ============================================
-HOST_DUMPLING_PATH=/usr/local/bin/dumpling  # Dumpling 可执行文件路径（宿主机）
+# Dumpling 可执行文件路径（宿主机绝对路径）
+# 示例：/home/work/.tiup/components/dumpling/v8.5.5/dumpling
+HOST_DUMPLING_PATH=/usr/local/bin/dumpling
 
 # ============================================
 # 日志配置
@@ -145,17 +148,24 @@ cd claw-export-platform
 cp .env.example .env
 vim .env  # 修改必要的配置
 
-# 3. 执行部署脚本
-chmod +x deploy.sh
-./deploy.sh
+# 3. 安装 Dumpling（如果尚未安装）
+tiup install dumpling
 
-# 4. 查看服务状态
+# 4. 确认 Dumpling 路径并更新 .env
+which dumpling  # 或 tiup list --installed
+# 更新 .env 中的 HOST_DUMPLING_PATH
+
+# 5. 执行部署脚本
+chmod +x deploy.sh
+./deploy.sh start
+
+# 6. 查看服务状态
 docker-compose ps
 
-# 5. 查看日志（确认初始化成功）
+# 7. 查看日志（确认初始化成功）
 docker-compose logs mysql | grep -A 10 "Database Init"
 
-# 6. 验证登录
+# 8. 验证登录
 curl -X POST http://localhost:8080/api/v1/admin/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin123"}'
@@ -173,6 +183,21 @@ curl -X POST http://localhost:8080/api/v1/admin/auth/login \
 │  claw-frontend   Nginx           前端静态文件      Port: 80      │
 │  claw-worker     Go Worker       任务执行器       (内部通信)     │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+#### deploy.sh 命令说明
+
+```bash
+./deploy.sh start       # 启动所有服务（默认命令）
+./deploy.sh stop        # 停止所有服务
+./deploy.sh restart     # 重启所有服务
+./deploy.sh status      # 查看服务状态
+./deploy.sh logs        # 查看日志
+./deploy.sh build       # 构建镜像
+./deploy.sh migrate     # 执行数据库迁移
+./deploy.sh clean       # 清理所有容器和卷
+./deploy.sh backup      # 备份数据库
+./deploy.sh help        # 显示帮助信息
 ```
 
 #### 重新初始化数据库
@@ -198,21 +223,24 @@ docker-compose up -d mysql
 # 等待 MySQL 就绪
 sleep 30
 
-# 3. 启动 Redis
+# 3. 执行数据库迁移
+./deploy.sh migrate
+
+# 4. 启动 Redis
 docker-compose up -d redis
 # 等待 Redis 就绪
 sleep 10
 
-# 4. 启动后端
+# 5. 启动后端
 docker-compose up -d backend
 
-# 5. 启动前端
+# 6. 启动前端
 docker-compose up -d frontend
 
-# 6. 启动 Worker
+# 7. 启动 Worker
 docker-compose up -d worker
 
-# 7. 检查服务
+# 8. 检查服务
 docker-compose ps
 ```
 
@@ -360,7 +388,7 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
-# 环境变量（同 backend）
+# 环境变量
 Environment=APP_ENV=production
 Environment=DB_HOST=localhost
 Environment=DB_PORT=3306
@@ -370,6 +398,7 @@ Environment=REDIS_ADDR=localhost:6379
 Environment=REDIS_PASSWORD=your-redis-password
 Environment=AES_KEY=your-32-byte-aes-key-here!!!!!!
 Environment=WORKER_COUNT=4
+Environment=DUMPLING_PATH=/usr/local/bin/dumpling
 
 [Install]
 WantedBy=multi-user.target
@@ -469,7 +498,18 @@ spec:
         env:
         - name: WORKER_COUNT
           value: "4"
+        - name: DUMPLING_PATH
+          value: "/usr/local/bin/dumpling"
         # ... 其他环境变量
+        volumeMounts:
+        - name: dumpling
+          mountPath: /usr/local/bin/dumpling
+          readOnly: true
+      volumes:
+      - name: dumpling
+        hostPath:
+          path: /usr/local/bin/dumpling
+          type: File
 ---
 apiVersion: v1
 kind: Service
@@ -601,19 +641,18 @@ docker exec claw-mysql mysql -uroot -proot123 claw_export -e \
   "UPDATE admins SET password_hash='\$2y\$10\$xxxxx...' WHERE username='admin';"
 ```
 
-#### 6. 数据库表不存在
+#### 6. 数据库表不存在 / 字段缺失
 
-**错误信息**：`Table 'claw_export.admins' doesn't exist`
+**错误信息**：`Table 'claw_export.admins' doesn't exist` 或 `Unknown column 'code' in 'field list'`
 
-**解决方案**：手动执行迁移脚本：
+**解决方案**：执行数据库迁移：
 
 ```bash
-# 方式一：复制并执行
-docker cp backend/migrations/init.sh claw-mysql:/tmp/
-docker exec claw-mysql bash /tmp/init.sh
+# 方式一：使用部署脚本
+./deploy.sh migrate
 
-# 方式二：重新初始化（会删除数据）
-docker-compose down -v && docker-compose up -d
+# 方式二：手动执行 SQL
+docker exec -i claw-mysql mysql -uroot -proot123 claw_export < backend/migrations/up/000003_add_missing_columns.up.sql
 ```
 
 #### 7. Go 版本不兼容
@@ -645,6 +684,49 @@ docker-compose logs worker --tail=100
 
 # 重启 Worker
 docker-compose restart worker
+```
+
+#### 9. Dumpling 执行失败：no such file or directory
+
+**错误信息**：`fork/exec /usr/local/bin/dumpling: no such file or directory`
+
+**原因**：
+1. `HOST_DUMPLING_PATH` 环境变量未正确配置
+2. 使用 sudo 时环境变量未传递
+3. Dumpling 需要 glibc，但 Alpine 容器默认使用 musl
+
+**解决方案**：
+
+```bash
+# 1. 确认 Dumpling 路径
+which dumpling
+# 或
+tiup list --installed | grep dumpling
+
+# 2. 更新 .env 文件
+echo "HOST_DUMPLING_PATH=/home/work/.tiup/components/dumpling/v8.5.5/dumpling" >> .env
+
+# 3. 确保文件可执行
+chmod +x $HOST_DUMPLING_PATH
+
+# 4. 重新部署（deploy.sh 已处理 sudo 环境变量传递）
+./deploy.sh start
+
+# 5. 验证容器内 dumpling 是否可用
+docker exec claw-worker /usr/local/bin/dumpling --version
+```
+
+#### 10. Dumpling 执行失败：glibc 兼容问题
+
+**错误信息**：`sh: /usr/local/bin/dumpling: not found`（但文件存在）
+
+**原因**：Alpine Linux 使用 musl libc，而 Dumpling 依赖 glibc
+
+**解决方案**：Dockerfile.worker 已安装 `gcompat`，重新构建镜像：
+
+```bash
+docker-compose build --no-cache worker
+docker-compose up -d worker
 ```
 
 ---
@@ -681,20 +763,25 @@ backend/migrations/
 ├── init.sh                           # 自动初始化脚本（Docker 用）
 ├── up/
 │   ├── 000001_init_schema.up.sql     # 初始化表结构 SQL
-│   └── 000002_drop_foreign_keys.up.sql  # 删除外键约束（可选）
+│   ├── 000002_drop_foreign_keys.up.sql  # 删除外键约束（可选）
+│   └── 000003_add_missing_columns.up.sql  # 添加缺失字段
 └── down/
     ├── 000001_init_schema.down.sql   # 回滚脚本
-    └── 000002_drop_foreign_keys.down.sql  # 回滚外键删除
+    ├── 000002_drop_foreign_keys.down.sql
+    └── 000003_add_missing_columns.down.sql
 ```
 
 #### 手动执行迁移
 
 ```bash
-# 方式一：通过 MySQL 容器执行
+# 方式一：使用部署脚本
+./deploy.sh migrate
+
+# 方式二：通过 MySQL 容器执行
 docker exec claw-mysql bash /docker-entrypoint-initdb.d/01_init.sh
 
-# 方式二：直接执行 SQL
-docker exec -i claw-mysql mysql -uroot -proot123 claw_export < backend/migrations/up/000001_init_schema.up.sql
+# 方式三：直接执行 SQL
+docker exec -i claw-mysql mysql -uroot -proot123 claw_export < backend/migrations/up/000003_add_missing_columns.up.sql
 ```
 
 #### 添加新迁移
@@ -702,7 +789,7 @@ docker exec -i claw-mysql mysql -uroot -proot123 claw_export < backend/migration
 1. 创建新的迁移文件：
 
 ```bash
-# backend/migrations/up/000003_add_new_table.up.sql
+# backend/migrations/up/000004_add_new_table.up.sql
 CREATE TABLE IF NOT EXISTS new_table (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     -- ...
@@ -760,7 +847,9 @@ ufw enable
 | `depends_on` | 所有版本 | 仅表示启动顺序，不等待健康状态 |
 | `volumes` | 所有版本 | 命名卷和绑定挂载均支持 |
 
-> **注意**：由于旧版本 `depends_on` 不支持 `condition: service_healthy`，服务启动顺序由 `deploy.sh` 脚本中的等待逻辑保证。
+> **注意**：
+> - 由于旧版本 `depends_on` 不支持 `condition: service_healthy`，服务启动顺序由 `deploy.sh` 脚本中的等待逻辑保证。
+> - 使用 `sudo` 执行 docker-compose 时，环境变量需要显式传递。`deploy.sh` 已处理此问题。
 
 ---
 
