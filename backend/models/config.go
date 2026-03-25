@@ -28,11 +28,20 @@ func (TiDBConfig) TableName() string {
 	return "tidb_configs"
 }
 
+// ProviderType 存储厂商类型
+type ProviderType string
+
+const (
+	ProviderAWS   ProviderType = "aws"
+	ProviderAliyun ProviderType = "aliyun"
+)
+
 // S3Config S3存储配置
 type S3Config struct {
 	ID                 int64          `gorm:"primaryKey;autoIncrement" json:"id"`
 	TenantID           int64          `gorm:"not null;uniqueIndex:uk_tenant_name;index:idx_tenant_default;column:tenant_id" json:"tenant_id"`
 	Name               string         `gorm:"type:varchar(100);not null;uniqueIndex:uk_tenant_name" json:"name"`
+	Provider           ProviderType   `gorm:"type:varchar(20);default:'aws';column:provider" json:"provider"`
 	Endpoint           string         `gorm:"type:varchar(255);not null" json:"endpoint"`
 	AccessKey          string         `gorm:"type:varchar(255);not null;column:access_key" json:"-"`
 	SecretKeyEncrypted string         `gorm:"type:text;not null;column:secret_key_encrypted" json:"-"`

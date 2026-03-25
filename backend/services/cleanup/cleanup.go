@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"claw-export-platform/models"
+	"claw-export-platform/pkg/encryption"
 	"claw-export-platform/services/s3"
 
 	"go.uber.org/zap"
@@ -15,7 +16,7 @@ import (
 // Cleaner 文件清理器
 type Cleaner struct {
 	db        *gorm.DB
-	s3Clients map[int64]*s3.Client // 按租户ID缓存的S3客户端
+	encryptor *encryption.Encryptor
 	logger    *zap.Logger
 
 	// 清理配置
@@ -26,7 +27,7 @@ type Cleaner struct {
 // CleanerConfig 清理器配置
 type CleanerConfig struct {
 	DB            *gorm.DB
-	S3Clients     map[int64]*s3.Client
+	Encryptor     *encryption.Encryptor
 	Logger        *zap.Logger
 	CheckInterval time.Duration // 默认1小时
 	LogRetention  time.Duration // 默认30天
@@ -41,13 +42,9 @@ func NewCleaner(cfg CleanerConfig) *Cleaner {
 		cfg.LogRetention = 30 * 24 * time.Hour // 30天
 	}
 
-	if cfg.S3Clients == nil {
-		cfg.S3Clients = make(map[int64]*s3.Client)
-	}
-
 	return &Cleaner{
 		db:            cfg.DB,
-		s3Clients:     cfg.S3Clients,
+		encryptor:     cfg.Encryptor,
 		logger:        cfg.Logger,
 		checkInterval: cfg.CheckInterval,
 		logRetention:  cfg.LogRetention,
@@ -161,15 +158,24 @@ func (c *Cleaner) cleanTaskFiles(ctx context.Context, task *models.ExportTask) e
 		return fmt.Errorf("failed to get s3 config: %w", err)
 	}
 
-	// 获取S3客户端
-	s3Client, exists := c.s3Clients[s3Config.ID]
-	if !exists {
-		// 创建新的S3客户端
-		// 注意：这里需要解密SecretKey，简化实现中跳过
-		c.logger.Warn("s3 client not found in cache, skipping file deletion",
-			zap.Int64("config_id", s3Config.ID),
-		)
-		return nil
+	// 解密SecretKey
+	secretKey, err := c.encryptor.Decrypt(s3Config.SecretKeyEncrypted)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt s3 secret key: %w", err)
+	}
+
+	// 创建S3客户端
+	s3Client, err := s3.NewStorageClient(ctx, s3.Config{
+		Provider:   string(s3Config.Provider),
+		Endpoint:   s3Config.Endpoint,
+		AccessKey:  s3Config.AccessKey,
+		SecretKey:  secretKey,
+		Bucket:     s3Config.Bucket,
+		Region:     s3Config.Region,
+		PathPrefix: s3Config.PathPrefix,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create s3 client: %w", err)
 	}
 
 	// 删除S3上的文件

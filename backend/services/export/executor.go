@@ -20,17 +20,15 @@ import (
 // Executor 导出执行器
 type Executor struct {
 	db        *gorm.DB
-	s3Client  *s3.Client
 	encryptor *encryption.Encryptor
 	logger    *zap.Logger
 	workDir   string
 }
 
 // NewExecutor 创建执行器
-func NewExecutor(db *gorm.DB, s3Client *s3.Client, encryptor *encryption.Encryptor, workDir string, logger *zap.Logger) *Executor {
+func NewExecutor(db *gorm.DB, encryptor *encryption.Encryptor, workDir string, logger *zap.Logger) *Executor {
 	return &Executor{
 		db:        db,
-		s3Client:  s3Client,
 		encryptor: encryptor,
 		logger:    logger,
 		workDir:   workDir,
@@ -38,7 +36,26 @@ func NewExecutor(db *gorm.DB, s3Client *s3.Client, encryptor *encryption.Encrypt
 }
 
 // Execute 执行导出任务
-func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models.TiDBConfig, sqlText, filetype, compress string) (*ExecutionResult, error) {
+func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models.TiDBConfig, s3Config *models.S3Config, sqlText, filetype, compress string) (*ExecutionResult, error) {
+	// 解密S3密钥
+	secretKey, err := e.encryptor.Decrypt(s3Config.SecretKeyEncrypted)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt s3 secret key: %w", err)
+	}
+
+	// 创建S3客户端
+	s3Client, err := s3.NewStorageClient(ctx, s3.Config{
+		Provider:   string(s3Config.Provider),
+		Endpoint:   s3Config.Endpoint,
+		AccessKey:  s3Config.AccessKey,
+		SecretKey:  secretKey,
+		Bucket:     s3Config.Bucket,
+		Region:     s3Config.Region,
+		PathPrefix: s3Config.PathPrefix,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create s3 client: %w", err)
+	}
 	// 解密密码
 	password, err := e.encryptor.Decrypt(tidbConfig.PasswordEncrypted)
 	if err != nil {
@@ -131,7 +148,7 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 	fileSize := fileInfo.Size()
 
 	// 上传到S3
-	if e.s3Client != nil {
+	if s3Client != nil {
 		file, err := os.Open(outputFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open output file: %w", err)
@@ -145,7 +162,7 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 
 		// 使用实际文件名作为 S3 key
 		actualS3Key := fmt.Sprintf("exports/%d/%s", taskID, filepath.Base(outputFile))
-		if err := e.s3Client.Upload(ctx, actualS3Key, file, fileSize, contentType); err != nil {
+		if err := s3Client.Upload(ctx, actualS3Key, file, fileSize, contentType); err != nil {
 			return nil, fmt.Errorf("failed to upload to s3: %w", err)
 		}
 		s3Key = actualS3Key

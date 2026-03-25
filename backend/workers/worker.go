@@ -14,7 +14,6 @@ import (
 	"claw-export-platform/pkg/queue"
 	redispkg "claw-export-platform/pkg/redis"
 	"claw-export-platform/services/export"
-	"claw-export-platform/services/s3"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -27,10 +26,6 @@ type Worker struct {
 	queue     *queue.Queue
 	encryptor *encryption.Encryptor
 	logger    *zap.Logger
-
-	// 任务执行器（按租户缓存S3客户端）
-	s3Clients   map[int64]*s3.Client
-	s3ClientsMu sync.RWMutex
 
 	// 工作目录
 	workDir string
@@ -59,7 +54,6 @@ func NewWorker(cfg Config) *Worker {
 		encryptor: cfg.Encryptor,
 		workDir:   cfg.WorkDir,
 		logger:    cfg.Logger,
-		s3Clients: make(map[int64]*s3.Client),
 		stopCh:    make(chan struct{}),
 	}
 }
@@ -163,15 +157,15 @@ func (w *Worker) handleTask(ctx context.Context, msg *queue.TaskMessage) error {
 		return fmt.Errorf("tidb config not found: %w", err)
 	}
 
-	// 获取S3配置并创建客户端
-	s3Client, err := w.getS3Client(ctx, msg.S3ConfigID)
-	if err != nil {
-		return fmt.Errorf("failed to get s3 client: %w", err)
+	// 获取S3配置
+	var s3Config models.S3Config
+	if err := w.db.WithContext(ctx).First(&s3Config, msg.S3ConfigID).Error; err != nil {
+		return fmt.Errorf("s3 config not found: %w", err)
 	}
 
 	// 创建执行器并执行
-	executor := export.NewExecutor(w.db, s3Client, w.encryptor, w.workDir, w.logger)
-	result, err := executor.Execute(ctx, task.ID, &tidbConfig, msg.SqlText, msg.Filetype, msg.Compress)
+	executor := export.NewExecutor(w.db, w.encryptor, w.workDir, w.logger)
+	result, err := executor.Execute(ctx, task.ID, &tidbConfig, &s3Config, msg.SqlText, msg.Filetype, msg.Compress)
 	if err != nil {
 		return err
 	}
@@ -278,46 +272,6 @@ func (w *Worker) checkPendingMessages() {
 			}
 		}
 	}
-}
-
-func (w *Worker) getS3Client(ctx context.Context, configID int64) (*s3.Client, error) {
-	w.s3ClientsMu.RLock()
-	if client, ok := w.s3Clients[configID]; ok {
-		w.s3ClientsMu.RUnlock()
-		return client, nil
-	}
-	w.s3ClientsMu.RUnlock()
-
-	// 获取S3配置
-	var s3Config models.S3Config
-	if err := w.db.WithContext(ctx).First(&s3Config, configID).Error; err != nil {
-		return nil, fmt.Errorf("s3 config not found: %w", err)
-	}
-
-	// 解密SecretKey
-	secretKey, err := w.encryptor.Decrypt(s3Config.SecretKeyEncrypted)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt s3 secret key: %w", err)
-	}
-
-	// 创建S3客户端
-	client, err := s3.NewClient(ctx, s3.Config{
-		Endpoint:   s3Config.Endpoint,
-		AccessKey:  s3Config.AccessKey,
-		SecretKey:  secretKey,
-		Bucket:     s3Config.Bucket,
-		Region:     s3Config.Region,
-		PathPrefix: s3Config.PathPrefix,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	w.s3ClientsMu.Lock()
-	w.s3Clients[configID] = client
-	w.s3ClientsMu.Unlock()
-
-	return client, nil
 }
 
 // WorkerPool Worker池

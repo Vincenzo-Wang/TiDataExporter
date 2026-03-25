@@ -89,10 +89,12 @@ WORKER_COUNT=4                  # Worker 并发数
 # ============================================
 # S3 存储配置（可选，租户可自行配置）
 # ============================================
+# 支持多云存储：AWS S3、阿里云 OSS
+# 配置方式：在前端管理界面创建 S3 配置时选择厂商
 S3_ACCESS_KEY=                  # Access Key ID
 S3_SECRET_KEY=                  # Secret Access Key
-S3_ENDPOINT=                    # S3 Endpoint（如：https://s3.amazonaws.com）
-S3_REGION=us-east-1             # S3 Region
+S3_ENDPOINT=                    # S3 Endpoint（AWS: https://s3.amazonaws.com，阿里云: oss-cn-hangzhou.aliyuncs.com）
+S3_REGION=us-east-1             # S3 Region（阿里云可不填）
 S3_BUCKET=                      # 默认 Bucket 名称
 
 # ============================================
@@ -764,11 +766,13 @@ backend/migrations/
 ├── up/
 │   ├── 000001_init_schema.up.sql     # 初始化表结构 SQL
 │   ├── 000002_drop_foreign_keys.up.sql  # 删除外键约束（可选）
-│   └── 000003_add_missing_columns.up.sql  # 添加缺失字段
+│   ├── 000003_add_missing_columns.up.sql  # 添加缺失字段
+│   └── 000004_add_s3_provider.up.sql  # 添加多云存储厂商支持
 └── down/
     ├── 000001_init_schema.down.sql   # 回滚脚本
     ├── 000002_drop_foreign_keys.down.sql
-    └── 000003_add_missing_columns.down.sql
+    ├── 000003_add_missing_columns.down.sql
+    └── 000004_add_s3_provider.down.sql
 ```
 
 #### 手动执行迁移
@@ -858,3 +862,102 @@ ufw enable
 - GitHub Issues: <repository-url>/issues
 - 文档: docs/
 - 邮件: support@example.com
+
+---
+
+## 多云存储配置
+
+### 支持的存储厂商
+
+| 厂商 | Provider 值 | SDK |
+|------|-------------|-----|
+| AWS S3 | `aws` | aws-sdk-go-v2 |
+| 阿里云 OSS | `aliyun` | aliyun-oss-go-sdk |
+
+### 配置方式
+
+1. **前端配置**：在「S3 配置管理」页面创建配置时选择厂商
+2. **API 配置**：通过 `/admin/s3-configs` 接口创建，传递 `provider` 字段
+
+### 阿里云 OSS 配置示例
+
+```bash
+# Endpoint 格式
+oss-cn-hangzhou.aliyuncs.com
+
+# Region（可选）
+cn-hangzhou
+
+# Bucket
+your-bucket-name
+```
+
+### AWS S3 配置示例
+
+```bash
+# Endpoint 格式
+https://s3.amazonaws.com
+
+# Region
+us-east-1
+
+# Bucket
+your-bucket-name
+```
+
+---
+
+## 功能更新部署指南
+
+当有新功能更新时，按以下步骤部署：
+
+### 1. 拉取最新代码
+
+```bash
+cd /path/to/claw-export-platform
+git pull origin main
+```
+
+### 2. 执行数据库迁移
+
+```bash
+# 使用部署脚本
+./deploy.sh migrate
+
+# 或手动执行
+docker exec -i claw-mysql mysql -uroot -p${MYSQL_ROOT_PASSWORD} claw_export < backend/migrations/up/000004_add_s3_provider.up.sql
+```
+
+### 3. 重新构建并部署
+
+```bash
+# 方式一：使用部署脚本（推荐）
+./deploy.sh restart
+
+# 方式二：手动操作
+docker-compose build --no-cache backend worker
+docker-compose up -d backend worker
+```
+
+### 4. 验证更新
+
+```bash
+# 检查服务状态
+docker-compose ps
+
+# 检查后端日志
+docker-compose logs -f backend --tail=50
+
+# 检查 Worker 日志
+docker-compose logs -f worker --tail=50
+
+# 健康检查
+curl http://localhost:8080/health
+```
+
+### 5. 验证新功能
+
+登录前端管理界面，在「S3 配置管理」中验证：
+- 创建配置时可以选择「AWS S3」或「阿里云 OSS」
+- 已有配置显示厂商标签
+

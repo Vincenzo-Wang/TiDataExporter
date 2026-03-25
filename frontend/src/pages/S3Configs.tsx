@@ -46,6 +46,7 @@ export default function S3Configs() {
     setEditingConfig(config);
     form.setFieldsValue({
       name: config.name,
+      provider: config.provider,
       endpoint: config.endpoint,
       bucket: config.bucket,
       region: config.region,
@@ -116,6 +117,17 @@ export default function S3Configs() {
       dataIndex: 'tenant_id',
       key: 'tenant_id',
       width: 80,
+    },
+    {
+      title: '厂商',
+      dataIndex: 'provider',
+      key: 'provider',
+      width: 80,
+      render: (provider: string) => (
+        <Tag color={provider === 'aliyun' ? 'orange' : 'blue'}>
+          {provider === 'aliyun' ? '阿里云' : 'AWS'}
+        </Tag>
+      ),
     },
     {
       title: 'Endpoint',
@@ -228,11 +240,25 @@ export default function S3Configs() {
             <Input placeholder="请输入配置名称" />
           </Form.Item>
           <Form.Item
+            name="provider"
+            label="存储厂商"
+            rules={[{ required: true, message: '请选择存储厂商' }]}
+            initialValue="aws"
+          >
+            <Select
+              placeholder="请选择存储厂商"
+              options={[
+                { value: 'aws', label: 'AWS S3' },
+                { value: 'aliyun', label: '阿里云 OSS' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
             name="endpoint"
             label="Endpoint"
             rules={[{ required: true, message: '请输入 Endpoint' }]}
           >
-            <Input placeholder="https://s3.amazonaws.com" />
+            <Input placeholder="https://s3.amazonaws.com 或 oss-cn-hangzhou.aliyuncs.com" />
           </Form.Item>
           <Form.Item
             name="bucket"
@@ -242,7 +268,7 @@ export default function S3Configs() {
             <Input placeholder="请输入 Bucket 名称" />
           </Form.Item>
           <Form.Item name="region" label="Region" initialValue="us-east-1">
-            <Input placeholder="请输入 Region" />
+            <Input placeholder="请输入 Region (阿里云可不填)" />
           </Form.Item>
           <Form.Item
             name="access_key_id"

@@ -14,25 +14,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-// Config S3配置
-type Config struct {
-	Endpoint   string
-	AccessKey  string
-	SecretKey  string
-	Bucket     string
-	Region     string
-	PathPrefix string
-}
-
-// Client S3客户端
-type Client struct {
+// AWSClient AWS S3客户端
+type AWSClient struct {
 	client *s3.Client
 	bucket string
 	prefix string
 }
 
-// NewClient 创建S3客户端
-func NewClient(ctx context.Context, cfg Config) (*Client, error) {
+// NewAWSClient 创建AWS S3客户端
+func NewAWSClient(ctx context.Context, cfg Config) (*AWSClient, error) {
 	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
 		if cfg.Endpoint != "" {
 			return aws.Endpoint{
@@ -54,7 +44,7 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to load aws config: %w", err)
 	}
 
-	return &Client{
+	return &AWSClient{
 		client: s3.NewFromConfig(awsCfg),
 		bucket: cfg.Bucket,
 		prefix: cfg.PathPrefix,
@@ -62,7 +52,7 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 }
 
 // Upload 上传文件
-func (c *Client) Upload(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
+func (c *AWSClient) Upload(ctx context.Context, key string, reader io.Reader, size int64, contentType string) error {
 	uploader := manager.NewUploader(c.client)
 
 	input := &s3.PutObjectInput{
@@ -77,17 +67,8 @@ func (c *Client) Upload(ctx context.Context, key string, reader io.Reader, size 
 	return err
 }
 
-// UploadFromPath 从本地路径上传文件
-func (c *Client) UploadFromPath(ctx context.Context, localPath, remoteKey string) (int64, error) {
-	// 简化实现：实际应用中应该使用 uploader.UploadFromFile
-	// 这里返回占位值，完整实现需要打开文件并上传
-	_ = localPath
-	_ = remoteKey
-	return 0, fmt.Errorf("not implemented: use Upload method with io.Reader")
-}
-
 // Delete 删除文件
-func (c *Client) Delete(ctx context.Context, key string) error {
+func (c *AWSClient) Delete(ctx context.Context, key string) error {
 	_, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(c.getFullKey(key)),
@@ -96,7 +77,7 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 }
 
 // DeleteByPrefix 批量删除指定前缀的文件
-func (c *Client) DeleteByPrefix(ctx context.Context, prefix string) error {
+func (c *AWSClient) DeleteByPrefix(ctx context.Context, prefix string) error {
 	paginator := s3.NewListObjectsV2Paginator(c.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(c.bucket),
 		Prefix: aws.String(c.getFullKey(prefix)),
@@ -132,8 +113,8 @@ func (c *Client) DeleteByPrefix(ctx context.Context, prefix string) error {
 	return nil
 }
 
-// GetPresignedURL 获取预签名URL（有效期1小时）
-func (c *Client) GetPresignedURL(ctx context.Context, key string, expire time.Duration) (string, error) {
+// GetPresignedURL 获取预签名URL
+func (c *AWSClient) GetPresignedURL(ctx context.Context, key string, expire time.Duration) (string, error) {
 	presignClient := s3.NewPresignClient(c.client)
 
 	req, err := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
@@ -150,47 +131,89 @@ func (c *Client) GetPresignedURL(ctx context.Context, key string, expire time.Du
 }
 
 // Head 检查文件是否存在并获取元数据
-func (c *Client) Head(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {
-	return c.client.HeadObject(ctx, &s3.HeadObjectInput{
+func (c *AWSClient) Head(ctx context.Context, key string) (HeadResult, error) {
+	resp, err := c.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(c.getFullKey(key)),
 	})
+	if err != nil {
+		return HeadResult{}, err
+	}
+
+	result := HeadResult{}
+	if resp.ContentLength != nil {
+		result.ContentLength = *resp.ContentLength
+	}
+	if resp.ContentType != nil {
+		result.ContentType = *resp.ContentType
+	}
+	if resp.LastModified != nil {
+		result.LastModified = *resp.LastModified
+	}
+	if resp.ETag != nil {
+		result.ETag = *resp.ETag
+	}
+
+	return result, nil
 }
 
 // Exists 检查文件是否存在
-func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
+func (c *AWSClient) Exists(ctx context.Context, key string) (bool, error) {
 	_, err := c.Head(ctx, key)
 	if err != nil {
-		// 如果是NotFound错误，返回false
 		return false, nil
 	}
 	return true, nil
 }
 
 // Size 获取文件大小
-func (c *Client) Size(ctx context.Context, key string) (int64, error) {
+func (c *AWSClient) Size(ctx context.Context, key string) (int64, error) {
 	resp, err := c.Head(ctx, key)
-	if err != nil {
-		return 0, err
-	}
-	if resp.ContentLength == nil {
-		return 0, nil
-	}
-	return *resp.ContentLength, nil
+	return resp.ContentLength, err
 }
 
-func (c *Client) getFullKey(key string) string {
+// GetFileURL 获取文件的公开URL（不使用预签名）
+func (c *AWSClient) GetFileURL(key string) string {
+	endpoint := c.client.Options().BaseEndpoint
+	if endpoint == nil {
+		return fmt.Sprintf("https://%s.s3.amazonaws.com/%s", c.bucket, c.getFullKey(key))
+	}
+	return fmt.Sprintf("https://%s/%s/%s", *endpoint, c.bucket, c.getFullKey(key))
+}
+
+func (c *AWSClient) getFullKey(key string) string {
 	if c.prefix == "" {
 		return key
 	}
 	return c.prefix + "/" + key
 }
 
-// GetFileURL 获取文件的公开URL（不使用预签名）
-func (c *Client) GetFileURL(key string) string {
-	endpoint := c.client.Options().BaseEndpoint
-	if endpoint == nil {
-		return fmt.Sprintf("https://%s.s3.amazonaws.com/%s", c.bucket, c.getFullKey(key))
-	}
-	return fmt.Sprintf("https://%s/%s/%s", *endpoint, c.bucket, c.getFullKey(key))
+// ============================================================
+// 以下为向后兼容的旧 API，保留以支持现有代码
+// ============================================================
+
+// Client 旧版客户端（向后兼容）
+type Client = AWSClient
+
+// NewClient 创建S3客户端（向后兼容）
+func NewClient(ctx context.Context, cfg Config) (*Client, error) {
+	return NewAWSClient(ctx, cfg)
+}
+
+// HeadObjectOutput 旧版返回类型（向后兼容）
+type HeadObjectOutput = s3.HeadObjectOutput
+
+// HeadLegacy 旧版 Head 方法（返回 s3.HeadObjectOutput）
+func (c *AWSClient) HeadLegacy(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {
+	return c.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(c.getFullKey(key)),
+	})
+}
+
+// UploadFromPath 从本地路径上传文件
+func (c *AWSClient) UploadFromPath(ctx context.Context, localPath, remoteKey string) (int64, error) {
+	_ = localPath
+	_ = remoteKey
+	return 0, fmt.Errorf("not implemented: use Upload method with io.Reader")
 }

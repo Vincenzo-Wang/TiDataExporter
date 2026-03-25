@@ -1013,6 +1013,7 @@ func (r *Router) listS3Configs(c *gin.Context) {
 			"id":          cfg.ID,
 			"tenant_id":   cfg.TenantID,
 			"name":        cfg.Name,
+			"provider":    cfg.Provider,
 			"endpoint":    cfg.Endpoint,
 			"bucket":      cfg.Bucket,
 			"region":      cfg.Region,
@@ -1036,6 +1037,7 @@ func (r *Router) listS3Configs(c *gin.Context) {
 type createS3ConfigRequest struct {
 	TenantID    int64  `json:"tenant_id" binding:"required"`
 	Name        string `json:"name" binding:"required"`
+	Provider    string `json:"provider"`
 	Endpoint    string `json:"endpoint" binding:"required"`
 	Bucket      string `json:"bucket" binding:"required"`
 	Region      string `json:"region"`
@@ -1056,6 +1058,9 @@ func (r *Router) createS3Config(c *gin.Context) {
 	if req.Status == 0 {
 		req.Status = 1
 	}
+	if req.Provider == "" {
+		req.Provider = "aws"
+	}
 
 	// 加密密钥
 	secretKeyEncrypted, err := r.encryptor.Encrypt(req.SecretKey)
@@ -1068,6 +1073,7 @@ func (r *Router) createS3Config(c *gin.Context) {
 	config := &models.S3Config{
 		TenantID:           req.TenantID,
 		Name:               req.Name,
+		Provider:           models.ProviderType(req.Provider),
 		Endpoint:           req.Endpoint,
 		AccessKey:          req.AccessKeyID,
 		SecretKeyEncrypted: secretKeyEncrypted,
@@ -1088,6 +1094,7 @@ func (r *Router) createS3Config(c *gin.Context) {
 
 type updateS3ConfigRequest struct {
 	Name        string `json:"name"`
+	Provider    string `json:"provider"`
 	Endpoint    string `json:"endpoint"`
 	Bucket      string `json:"bucket"`
 	Region      string `json:"region"`
@@ -1123,6 +1130,9 @@ func (r *Router) updateS3Config(c *gin.Context) {
 	updates := map[string]interface{}{}
 	if req.Name != "" {
 		updates["name"] = req.Name
+	}
+	if req.Provider != "" {
+		updates["provider"] = req.Provider
 	}
 	if req.Endpoint != "" {
 		updates["endpoint"] = req.Endpoint

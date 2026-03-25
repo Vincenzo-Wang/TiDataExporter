@@ -292,7 +292,8 @@ func (h *ExportHandler) GetFile(c *gin.Context) {
 	}
 
 	// 创建S3客户端
-	s3Client, err := s3.NewClient(c.Request.Context(), s3.Config{
+	s3Client, err := s3.NewStorageClient(c.Request.Context(), s3.Config{
+		Provider:   string(s3Config.Provider),
 		Endpoint:   s3Config.Endpoint,
 		AccessKey:  s3Config.AccessKey,
 		SecretKey:  secretKey,

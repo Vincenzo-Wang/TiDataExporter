@@ -44,6 +44,7 @@ export interface S3Config {
   id: number;
   tenant_id: number;
   name: string;
+  provider: 'aws' | 'aliyun';
   endpoint: string;
   bucket: string;
   region: string;
