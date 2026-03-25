@@ -53,14 +53,20 @@ docker_cmd() {
 
 # 执行 compose 命令（兼容 docker-compose 和 docker compose）
 compose_cmd() {
+    # 使用 --env-file 确保环境变量被读取（兼容旧版 docker-compose）
+    local env_file_args=""
+    if [ -f ".env" ]; then
+        env_file_args="--env-file .env"
+    fi
+    
     if [ "$COMPOSE_COMMAND" = "docker-compose" ]; then
         if [ "$USE_SUDO_DOCKER" -eq 1 ]; then
-            sudo docker-compose "$@"
+            sudo docker-compose $env_file_args "$@"
         else
-            docker-compose "$@"
+            docker-compose $env_file_args "$@"
         fi
     else
-        docker_cmd compose "$@"
+        docker_cmd compose $env_file_args "$@"
     fi
 }
 
@@ -147,6 +153,34 @@ check_config() {
     # 检查必要的环境变量
     source .env
     
+    # 导出环境变量供 docker-compose 使用（旧版 docker-compose 兼容）
+    export MYSQL_ROOT_PASSWORD MYSQL_DATABASE MYSQL_USER MYSQL_PASSWORD MYSQL_PORT
+    export REDIS_PASSWORD REDIS_PORT
+    export JWT_SECRET ENCRYPTION_KEY AES_KEY
+    export FRONTEND_PORT BACKEND_PORT APP_ENV APP_PORT
+    export S3_ACCESS_KEY S3_SECRET_KEY S3_ENDPOINT S3_REGION S3_BUCKET
+    export WORKER_COUNT LOG_LEVEL
+    
+    # 导出 HOST_DUMPLING_PATH（如果未设置则使用默认值）
+    if [ -z "$HOST_DUMPLING_PATH" ]; then
+        export HOST_DUMPLING_PATH="/usr/local/bin/dumpling"
+        log_warning "HOST_DUMPLING_PATH 未设置，使用默认值: /usr/local/bin/dumpling"
+    else
+        export HOST_DUMPLING_PATH
+        log_info "HOST_DUMPLING_PATH: $HOST_DUMPLING_PATH"
+        # 检查 dumpling 是否存在
+        if [ ! -f "$HOST_DUMPLING_PATH" ]; then
+            log_error "Dumpling 不存在于: $HOST_DUMPLING_PATH"
+            log_info "请安装 dumpling: tiup install dumpling"
+            exit 1
+        fi
+        # 检查是否可执行
+        if [ ! -x "$HOST_DUMPLING_PATH" ]; then
+            log_warning "Dumpling 不可执行，正在添加执行权限..."
+            chmod +x "$HOST_DUMPLING_PATH" || log_warning "无法添加执行权限"
+        fi
+    fi
+    
     if [ -z "$JWT_SECRET" ] || [ "$JWT_SECRET" = "your-super-secret-jwt-key-change-in-production" ]; then
         log_warning "JWT_SECRET 未配置或使用默认值，建议修改！"
     fi
@@ -186,17 +220,17 @@ run_migrations() {
         filename=$(basename "$migration_file")
         log_info "执行迁移: $filename"
         
-        # 执行迁移（忽略"字段已存在"等非致命错误）
-        compose_cmd exec -T mysql mysql -u root -p"${MYSQL_ROOT_PASSWORD:-root123}" "${MYSQL_DATABASE:-claw}" < "$migration_file" 2>&1 | while read -r line; do
-            # 忽略非致命错误
-            if echo "$line" | grep -qE "(Duplicate column|Duplicate key name|already exists)"; then
-                log_info "跳过已存在的字段/索引"
-            elif [ -n "$line" ]; then
-                echo "$line"
-            fi
-        done
+        # 执行迁移
+        set +e
+        compose_cmd exec -T mysql mysql -u root -p"${MYSQL_ROOT_PASSWORD:-root123}" "${MYSQL_DATABASE:-claw}" < "$migration_file" 2>&1
+        result=$?
+        set -e
         
-        log_success "迁移完成: $filename"
+        if [ $result -eq 0 ]; then
+            log_success "迁移完成: $filename"
+        else
+            log_warning "迁移 $filename 可能有错误（字段可能已存在）"
+        fi
     done
     
     log_success "数据库迁移完成"

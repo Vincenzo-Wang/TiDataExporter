@@ -68,7 +68,7 @@ services:
       - S3_BUCKET=${S3_BUCKET:-}
     volumes:
       - ./backend/config:/app/config:ro
-      - ${HOST_DUMPLING_PATH:-/usr/local/bin/dumpling}:/usr/local/bin/dumpling:ro
+      - ${HOST_DUMPLING_PATH}:/usr/local/bin/dumpling:ro
       - tmp_data:/tmp/exports
     ports:
       - "${BACKEND_PORT:-8080}:8080"
@@ -118,7 +118,7 @@ services:
       - DUMPLING_PATH=/usr/local/bin/dumpling
       - WORKER_COUNT=${WORKER_COUNT:-4}
     volumes:
-      - ${HOST_DUMPLING_PATH:-/usr/local/bin/dumpling}:/usr/local/bin/dumpling:ro
+      - ${HOST_DUMPLING_PATH}:/usr/local/bin/dumpling:ro
       - tmp_data:/tmp/exports
     user: "0:0"
 
