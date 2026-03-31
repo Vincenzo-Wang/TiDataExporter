@@ -278,15 +278,75 @@ func (h *ExportHandler) BatchQuery(c *gin.Context) {
 	var tasks []models.ExportTask
 	h.db.Where("id IN ? AND tenant_id = ?", req.TaskIDs, tenantID).Find(&tasks)
 
+	// 收集所有需要的 S3 配置 ID
+	s3ConfigIDs := make(map[int64]bool)
+	for _, task := range tasks {
+		if task.S3ConfigID > 0 && task.FileURL != "" && task.Status == models.TaskStatusSuccess {
+			s3ConfigIDs[task.S3ConfigID] = true
+		}
+	}
+
+	// 批量获取 S3 配置
+	s3Configs := make(map[int64]models.S3Config)
+	if len(s3ConfigIDs) > 0 {
+		var configs []models.S3Config
+		ids := make([]int64, 0, len(s3ConfigIDs))
+		for id := range s3ConfigIDs {
+			ids = append(ids, id)
+		}
+		h.db.Where("id IN ?", ids).Find(&configs)
+		for _, cfg := range configs {
+			s3Configs[cfg.ID] = cfg
+		}
+	}
+
 	results := make([]gin.H, len(tasks))
 	for i, task := range tasks {
 		result := gin.H{
 			"task_id": task.ID,
 			"status":  task.Status,
 		}
-		if task.FileURL != "" {
+
+		// 生成完整的 file_url（预签名URL）
+		if task.FileURL != "" && task.Status == models.TaskStatusSuccess {
+			if s3Config, ok := s3Configs[task.S3ConfigID]; ok {
+				if secretKey, err := h.encryptor.Decrypt(s3Config.SecretKeyEncrypted); err == nil {
+					if s3Client, err := s3.NewStorageClient(c.Request.Context(), s3.Config{
+						Provider:   string(s3Config.Provider),
+						Endpoint:   s3Config.Endpoint,
+						AccessKey:  s3Config.AccessKey,
+						SecretKey:  secretKey,
+						Bucket:     s3Config.Bucket,
+						Region:     s3Config.Region,
+						PathPrefix: s3Config.PathPrefix,
+					}); err == nil {
+						expiresIn := time.Hour
+						if task.ExpiresAt != nil {
+							remaining := time.Until(*task.ExpiresAt)
+							if remaining > time.Hour {
+								expiresIn = remaining
+							} else if remaining > 0 {
+								expiresIn = remaining
+							}
+						}
+						if presignedURL, err := s3Client.GetPresignedURL(c.Request.Context(), task.FileURL, expiresIn); err == nil {
+							result["file_url"] = presignedURL
+						} else {
+							result["file_url"] = task.FileURL
+						}
+					} else {
+						result["file_url"] = task.FileURL
+					}
+				} else {
+					result["file_url"] = task.FileURL
+				}
+			} else {
+				result["file_url"] = task.FileURL
+			}
+		} else if task.FileURL != "" {
 			result["file_url"] = task.FileURL
 		}
+
 		if task.ErrorMessage != "" {
 			result["error_message"] = task.ErrorMessage
 		}
