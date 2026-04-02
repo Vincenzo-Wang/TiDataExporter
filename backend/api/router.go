@@ -579,6 +579,7 @@ func (r *Router) listTasks(c *gin.Context) {
 	// 构建响应
 	items := make([]gin.H, len(tasks))
 	for i, task := range tasks {
+		files := buildAdminTaskFiles(task)
 		item := gin.H{
 			"task_id":         task.ID,
 			"task_name":       task.TaskName,
@@ -592,6 +593,7 @@ func (r *Router) listTasks(c *gin.Context) {
 			"status":          task.Status,
 			"progress":        calculateProgress(task),
 			"file_url":        task.FileURL,
+			"file_count":      len(files),
 			"file_size":       task.FileSize,
 			"row_count":       task.RowCount,
 			"retry_count":     task.RetryCount,
@@ -679,6 +681,7 @@ func (r *Router) getTask(c *gin.Context) {
 		}
 	}
 
+	files := buildAdminTaskFiles(task)
 	data := gin.H{
 		"task_id":          task.ID,
 		"task_name":        task.TaskName,
@@ -696,6 +699,8 @@ func (r *Router) getTask(c *gin.Context) {
 		"status":           task.Status,
 		"progress":         calculateProgress(task),
 		"file_url":         task.FileURL,
+		"files":            files,
+		"file_count":       len(files),
 		"file_size":        task.FileSize,
 		"row_count":        task.RowCount,
 		"retry_count":      task.RetryCount,
@@ -1474,6 +1479,51 @@ func (r *Router) recordAuditLog(c *gin.Context, action, resourceType string, res
 // jsonMarshal 安全的JSON序列化
 func jsonMarshal(v interface{}) ([]byte, error) {
 	return json.Marshal(v)
+}
+
+type adminTaskFile struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+func parseAdminTaskFiles(task models.ExportTask) []adminTaskFile {
+	if strings.TrimSpace(task.FileURLs) != "" {
+		var files []adminTaskFile
+		if err := json.Unmarshal([]byte(task.FileURLs), &files); err == nil && len(files) > 0 {
+			return files
+		}
+	}
+	if strings.TrimSpace(task.FileURL) == "" {
+		return nil
+	}
+	return []adminTaskFile{{
+		Path: task.FileURL,
+		Name: filepath.Base(task.FileURL),
+		Size: task.FileSize,
+	}}
+}
+
+func buildAdminTaskFiles(task models.ExportTask) []gin.H {
+	taskFiles := parseAdminTaskFiles(task)
+	if len(taskFiles) == 0 {
+		return nil
+	}
+	respFiles := make([]gin.H, 0, len(taskFiles))
+	for i, file := range taskFiles {
+		name := file.Name
+		if strings.TrimSpace(name) == "" {
+			name = filepath.Base(file.Path)
+		}
+		respFiles = append(respFiles, gin.H{
+			"index": i,
+			"name":  name,
+			"path":  file.Path,
+			"url":   file.Path,
+			"size":  file.Size,
+		})
+	}
+	return respFiles
 }
 
 // getStatisticsOverview 获取统计概览

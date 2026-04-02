@@ -3,7 +3,7 @@ import { Card, Descriptions, Tag, Progress, Button, Space, Modal, Typography, me
 import { ArrowLeftOutlined, StopOutlined, RedoOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '@/services/api';
-import type { ApiResponse, ExportTask, TaskStatus } from '@/types';
+import type { ApiResponse, ExportTask, ExportTaskFile, TaskStatus } from '@/types';
 
 const { Text } = Typography;
 const { Paragraph } = Typography;
@@ -96,11 +96,53 @@ export default function TaskDetail() {
   }
 
   const statusInfo = taskStatusMap[task.status] || { color: 'default', text: task.status };
-  const fileList = task.files && task.files.length > 0
+  const fileList: ExportTaskFile[] = task.files && task.files.length > 0
     ? task.files
     : (task.file_url
       ? [{ name: 'output', path: task.file_url, url: task.file_url, size: task.file_size }]
       : []);
+
+  const fileColumns = [
+    {
+      title: '文件名',
+      dataIndex: 'name',
+      key: 'name',
+      width: 260,
+      render: (name: string, record: ExportTaskFile, index: number) => name || `文件 ${index + 1}`,
+    },
+    {
+      title: '大小',
+      dataIndex: 'size',
+      key: 'size',
+      width: 120,
+      render: (size: number) => formatSize(size || 0),
+    },
+    {
+      title: '文件路径',
+      dataIndex: 'url',
+      key: 'url',
+      ellipsis: true,
+      render: (url: string, record: ExportTaskFile) => <Text copyable={{ text: url || record.path }}>{url || record.path}</Text>,
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 140,
+      render: (_: unknown, record: ExportTaskFile) => {
+        const url = record.url || record.path;
+        return (
+          <Space size={8}>
+            <Button type="link" size="small" icon={<DownloadOutlined />} href={url} target="_blank">
+              下载
+            </Button>
+            <Button type="link" size="small" onClick={() => copyFileUrl(url)}>
+              复制
+            </Button>
+          </Space>
+        );
+      },
+    },
+  ];
 
   return (
     <div>
@@ -156,20 +198,16 @@ export default function TaskDetail() {
             {fileList.length === 0 ? (
               <Text>-</Text>
             ) : (
-              <Space direction="vertical" style={{ width: '100%' }} size={6}>
-                {fileList.map((file, index) => (
-                  <Space key={`${file.path}-${index}`} wrap>
-                    <Text strong>{file.name || `文件 ${index + 1}`}</Text>
-                    <Text type="secondary">({formatSize(file.size || 0)})</Text>
-                    <Text copyable={{ text: file.url }}>{file.url}</Text>
-                    <Button type="link" size="small" icon={<DownloadOutlined />} href={file.url} target="_blank">
-                      下载
-                    </Button>
-                    <Button type="link" size="small" onClick={() => copyFileUrl(file.url)}>
-                      复制
-                    </Button>
-                  </Space>
-                ))}
+              <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                <Text type="secondary">共 {task.file_count || fileList.length} 个文件（分页展示，每页 20 条）</Text>
+                <Table
+                  rowKey={(record, index) => `${record.path}-${index}`}
+                  size="small"
+                  columns={fileColumns}
+                  dataSource={fileList}
+                  pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'] }}
+                  scroll={{ x: 960, y: 420 }}
+                />
               </Space>
             )}
           </Descriptions.Item>
