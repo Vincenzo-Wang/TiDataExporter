@@ -78,6 +78,24 @@ chmod +x deploy.sh
 ./deploy.sh help        # Show help
 ```
 
+### Cloud Test Deployment
+
+For R&D test environments, use `docker-compose.test.yml` with a single `.env.test` file and connect directly to managed `TiDB` / `Redis`.
+
+```bash
+# 1. Fill cloud connection settings
+vim .env.test
+
+# 2. Run migrations once
+docker compose --env-file .env.test -f docker-compose.test.yml run --rm migrate
+
+# 3. Start app services
+docker compose --env-file .env.test -f docker-compose.test.yml up -d --build backend worker frontend
+
+# 4. Check status
+docker compose --env-file .env.test -f docker-compose.test.yml ps
+```
+
 ## Architecture
 
 ```
@@ -104,10 +122,10 @@ chmod +x deploy.sh
          │                       │
          ▼                       ▼
 ┌─────────────────┐    ┌─────────────────────────────────────────┐
-│  MySQL          │    │  Redis                                  │
-│  - Business     │    │  - Task queue (priority queue)          │
-│    data storage │    │  - Cache                                │
-│  - Port: 3306   │    │  - Port: 6379                           │
+│  App Meta DB    │    │  Redis                                  │
+│  - Dev: MySQL   │    │  - Task queue (priority queue)          │
+│  - Prod: TiDB   │    │  - Cache                                │
+│  - Port: 4000   │    │  - Cloud / self-hosted                  │
 └─────────────────┘    └───────────────────┬─────────────────────┘
                                            │
                                            ▼
@@ -191,8 +209,8 @@ curl -X POST http://localhost:8080/api/v1/export/tasks \
 
 ### Backend
 - Go 1.25+ / Gin Framework
-- MySQL 8.0
-- Redis 7
+- MySQL protocol / TiDB-compatible metadata database
+- Redis 7 / Managed Redis compatible
 - Dumpling (TiDB data export tool)
 
 ### Frontend
@@ -314,6 +332,24 @@ chmod +x deploy.sh
 # 默认管理员：admin / admin123（首次登录后请立即修改！）
 ```
 
+### 测试环境部署
+
+研发自测建议直接使用 `docker-compose.test.yml` + `.env.test`，并直连阿里云 `TiDB` / 云 `Redis`。
+
+```bash
+# 1. 填写云资源连接信息
+vim .env.test
+
+# 2. 先执行迁移
+docker compose --env-file .env.test -f docker-compose.test.yml run --rm migrate
+
+# 3. 启动测试环境
+docker compose --env-file .env.test -f docker-compose.test.yml up -d --build backend worker frontend
+
+# 4. 查看运行状态
+docker compose --env-file .env.test -f docker-compose.test.yml ps
+```
+
 ## API 概览
 
 ### 管理端 API（JWT 认证）
@@ -348,8 +384,8 @@ chmod +x deploy.sh
 
 ### 后端
 - Go 1.25+ / Gin Framework
-- MySQL 8.0
-- Redis 7
+- MySQL 协议 / TiDB 兼容元数据库
+- Redis 7 / 云 Redis 兼容
 - Dumpling (TiDB 数据导出工具)
 
 ### 前端

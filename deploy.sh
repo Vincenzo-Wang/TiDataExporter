@@ -152,12 +152,17 @@ check_config() {
     
     # 检查必要的环境变量
     source .env
+
+    # 兼容旧配置：如果仍使用 ENCRYPTION_KEY，则自动映射为 AES_KEY
+    if [ -z "$AES_KEY" ] && [ -n "$ENCRYPTION_KEY" ]; then
+        export AES_KEY="$ENCRYPTION_KEY"
+    fi
     
     # 导出环境变量供 docker-compose 使用（旧版 docker-compose 兼容）
     export MYSQL_ROOT_PASSWORD MYSQL_DATABASE MYSQL_USER MYSQL_PASSWORD MYSQL_PORT
     export REDIS_PASSWORD REDIS_PORT
-    export JWT_SECRET ENCRYPTION_KEY AES_KEY
-    export FRONTEND_PORT BACKEND_PORT APP_ENV APP_PORT
+    export JWT_SECRET AES_KEY
+    export FRONTEND_PORT BACKEND_PORT SERVER_MODE
     export S3_ACCESS_KEY S3_SECRET_KEY S3_ENDPOINT S3_REGION S3_BUCKET
     export WORKER_COUNT LOG_LEVEL
     
@@ -185,8 +190,8 @@ check_config() {
         log_warning "JWT_SECRET 未配置或使用默认值，建议修改！"
     fi
     
-    if [ -z "$ENCRYPTION_KEY" ] || [ "$ENCRYPTION_KEY" = "your-32-byte-encryption-key-here" ]; then
-        log_warning "ENCRYPTION_KEY 未配置或使用默认值，建议修改！"
+    if [ -z "$AES_KEY" ] || [ "$AES_KEY" = "0123456789abcdef0123456789abcdef" ] || [ "$AES_KEY" = "your-32-byte-encryption-key-here" ]; then
+        log_warning "AES_KEY 未配置或使用默认值，建议修改！"
     fi
     
     log_success "配置文件检查完成"

@@ -157,3 +157,8 @@ func (q *Queue) ClaimPendingTask(ctx context.Context, msgID string) (*TaskMessag
 func (q *Queue) Initialize(ctx context.Context) error {
 	return q.redis.EnsureStreamAndGroup(ctx)
 }
+
+// PendingTimeout 返回待处理消息的认领超时阈值
+func (q *Queue) PendingTimeout() time.Duration {
+	return q.redis.PendingTimeout()
+}

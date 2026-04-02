@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"claw-export-platform/config"
 	"claw-export-platform/pkg/database"
@@ -18,133 +17,167 @@ import (
 	"claw-export-platform/services/task"
 	"claw-export-platform/workers"
 
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
 func main() {
-	// 解析命令行参数
-	workerCount := flag.Int("workers", 4, "number of workers")
-	workDir := flag.String("work-dir", "/tmp/exports", "working directory for export files")
-	flag.Parse()
-
-	// 加载配置
 	cfg := config.Load()
 
-	// 初始化日志
-	logger, err := zap.NewProduction()
+	workerCount := flag.Int("workers", cfg.Worker.Count, "number of workers")
+	workDir := flag.String("work-dir", cfg.Worker.WorkDir, "working directory for export files")
+	flag.Parse()
+
+	cfg.Worker.Count = *workerCount
+	cfg.Worker.WorkDir = *workDir
+	if cfg.Redis.ConsumerName == "" {
+		cfg.Redis.ConsumerName = buildConsumerName()
+	}
+
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid config: %v\n", err)
+		os.Exit(1)
+	}
+
+	logger, err := newLogger(cfg.Server.Mode)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to init logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer logger.Sync()
 
-	// 连接数据库
-	dbCfg := database.Config{
+	db, err := database.Connect(database.Config{
 		Host:            cfg.Database.Host,
 		Port:            cfg.Database.Port,
 		User:            cfg.Database.User,
 		Password:        cfg.Database.Password,
 		Database:        cfg.Database.Database,
+		Charset:         cfg.Database.Charset,
+		Loc:             cfg.Database.Loc,
+		TLSMode:         cfg.Database.TLSMode,
+		ServerName:      cfg.Database.ServerName,
+		CAFile:          cfg.Database.CAFile,
+		CertFile:        cfg.Database.CertFile,
+		KeyFile:         cfg.Database.KeyFile,
 		MaxOpenConns:    cfg.Database.MaxOpenConns,
 		MaxIdleConns:    cfg.Database.MaxIdleConns,
 		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
-	}
-
-	db, err := database.Connect(dbCfg, logger)
+		ConnMaxIdleTime: cfg.Database.ConnMaxIdleTime,
+		DialTimeout:     cfg.Database.DialTimeout,
+		ReadTimeout:     cfg.Database.ReadTimeout,
+		WriteTimeout:    cfg.Database.WriteTimeout,
+	}, logger)
 	if err != nil {
 		logger.Fatal("failed to connect database", zap.Error(err))
-		os.Exit(1)
 	}
 	defer database.Close(db)
 
-	logger.Info("database connected",
-		zap.String("host", cfg.Database.Host),
-		zap.Int("port", cfg.Database.Port),
-		zap.String("database", cfg.Database.Database),
-	)
-
-	// 连接Redis
 	redisClient, err := redispkg.NewClient(redispkg.Config{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
+		Addr:               cfg.Redis.Addr,
+		Username:           cfg.Redis.Username,
+		Password:           cfg.Redis.Password,
+		DB:                 cfg.Redis.DB,
+		TLSEnabled:         cfg.Redis.TLSEnabled,
+		InsecureSkipVerify: cfg.Redis.InsecureSkipVerify,
+		ServerName:         cfg.Redis.ServerName,
+		CAFile:             cfg.Redis.CAFile,
+		CertFile:           cfg.Redis.CertFile,
+		KeyFile:            cfg.Redis.KeyFile,
+		DialTimeout:        cfg.Redis.DialTimeout,
+		ReadTimeout:        cfg.Redis.ReadTimeout,
+		WriteTimeout:       cfg.Redis.WriteTimeout,
+		PoolSize:           cfg.Redis.PoolSize,
+		MinIdleConns:       cfg.Redis.MinIdleConns,
+		MaxRetries:         cfg.Redis.MaxRetries,
+		StreamName:         cfg.Redis.StreamName,
+		ConsumerGroup:      cfg.Redis.ConsumerGroup,
+		ConsumerName:       cfg.Redis.ConsumerName,
+		PendingTimeout:     cfg.Redis.PendingTimeout,
+		BlockTimeout:       cfg.Redis.BlockTimeout,
 	})
 	if err != nil {
 		logger.Fatal("failed to connect redis", zap.Error(err))
-		os.Exit(1)
 	}
 	defer redisClient.Close()
 
-	logger.Info("redis connected", zap.String("addr", cfg.Redis.Addr))
+	logger.Info("redis connected",
+		zap.String("addr", cfg.Redis.Addr),
+		zap.String("consumer_name", cfg.Redis.ConsumerName),
+		zap.Bool("tls_enabled", cfg.Redis.TLSEnabled),
+	)
 
-	// 初始化任务队列
 	taskQueue := queue.NewQueue(redisClient, logger.Named("queue"))
 	ctx := context.Background()
 	if err := taskQueue.Initialize(ctx); err != nil {
 		logger.Fatal("failed to initialize queue", zap.Error(err))
-		os.Exit(1)
 	}
 
-	// 创建加密器
 	encryptor, err := encryption.NewEncryptor(cfg.Security.AESKey)
 	if err != nil {
 		logger.Fatal("failed to create encryptor", zap.Error(err))
-		os.Exit(1)
 	}
 
-	// 确保工作目录存在
-	if err := os.MkdirAll(*workDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.Worker.WorkDir, 0755); err != nil {
 		logger.Fatal("failed to create work directory", zap.Error(err))
-		os.Exit(1)
 	}
 
-	// 创建Worker池
 	workerPool := workers.NewWorkerPool(
-		*workerCount,
+		cfg.Worker.Count,
 		db,
 		taskQueue,
 		encryptor,
-		*workDir,
+		cfg.Worker.WorkDir,
 		logger.Named("worker-pool"),
 	)
 
-	// 创建上下文用于控制后台任务
-	ctx, cancel := context.WithCancel(context.Background())
+	runtimeCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 创建并启动任务管理器（超时检查器）
 	taskManager := task.NewTaskManager(task.ManagerConfig{
 		DB:                   db,
 		Queue:                taskQueue,
 		Logger:               logger.Named("task-manager"),
-		TimeoutCheckInterval: time.Minute,   // 1分钟
-		TaskTimeout:          2 * time.Hour, // 2小时
+		TimeoutCheckInterval: cfg.Worker.TimeoutCheckInterval,
+		TaskTimeout:          cfg.Worker.TaskTimeout,
 	})
-	go taskManager.StartTimeoutChecker(ctx)
+	go taskManager.StartTimeoutChecker(runtimeCtx)
 
-	// 创建并启动文件清理器
 	cleaner := cleanup.NewCleaner(cleanup.CleanerConfig{
 		DB:            db,
 		Encryptor:     encryptor,
 		Logger:        logger.Named("cleaner"),
-		CheckInterval: time.Hour,              // 1小时
-		LogRetention:  30 * 24 * time.Hour,    // 30天
+		CheckInterval: cfg.Worker.CleanupInterval,
+		LogRetention:  cfg.Worker.LogRetention,
 	})
-	go cleaner.Start(ctx)
+	go cleaner.Start(runtimeCtx)
 
-	// 启动Worker池
-	logger.Info("starting worker pool", zap.Int("workers", *workerCount))
+	logger.Info("starting worker pool",
+		zap.Int("workers", cfg.Worker.Count),
+		zap.String("work_dir", cfg.Worker.WorkDir),
+	)
 	workerPool.Start()
 
-	// 等待终止信号
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	sig := <-sigCh
 	logger.Info("received shutdown signal", zap.String("signal", sig.String()))
 
-	// 优雅关闭（先取消后台任务）
 	cancel()
 	workerPool.Stop()
 	logger.Info("worker shutdown complete")
+}
+
+func newLogger(mode string) (*zap.Logger, error) {
+	if mode == gin.DebugMode {
+		return zap.NewDevelopment()
+	}
+	return zap.NewProduction()
+}
+
+func buildConsumerName() string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "unknown-host"
+	}
+	return fmt.Sprintf("%s-%d", hostname, os.Getpid())
 }

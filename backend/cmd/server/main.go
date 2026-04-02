@@ -22,47 +22,52 @@ import (
 )
 
 func main() {
-	// 解析命令行参数
-	port := flag.Int("port", 8080, "server port")
-	mode := flag.String("mode", "release", "gin mode (debug/release)")
-	flag.Parse()
-
-	// 加载配置
 	cfg := config.Load()
 
-	// 初始化日志
-	var logger *zap.Logger
-	var err error
-	if *mode == "debug" {
-		logger, err = zap.NewDevelopment()
-	} else {
-		logger, err = zap.NewProduction()
+	port := flag.Int("port", cfg.Server.Port, "server port")
+	mode := flag.String("mode", cfg.Server.Mode, "gin mode (debug/release)")
+	flag.Parse()
+
+	cfg.Server.Port = *port
+	cfg.Server.Mode = *mode
+
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid config: %v\n", err)
+		os.Exit(1)
 	}
+
+	logger, err := newLogger(cfg.Server.Mode)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to init logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer logger.Sync()
 
-	// 设置Gin模式
-	gin.SetMode(*mode)
+	gin.SetMode(cfg.Server.Mode)
 
-	// 连接数据库
-	dbCfg := database.Config{
+	db, err := database.Connect(database.Config{
 		Host:            cfg.Database.Host,
 		Port:            cfg.Database.Port,
 		User:            cfg.Database.User,
 		Password:        cfg.Database.Password,
 		Database:        cfg.Database.Database,
+		Charset:         cfg.Database.Charset,
+		Loc:             cfg.Database.Loc,
+		TLSMode:         cfg.Database.TLSMode,
+		ServerName:      cfg.Database.ServerName,
+		CAFile:          cfg.Database.CAFile,
+		CertFile:        cfg.Database.CertFile,
+		KeyFile:         cfg.Database.KeyFile,
 		MaxOpenConns:    cfg.Database.MaxOpenConns,
 		MaxIdleConns:    cfg.Database.MaxIdleConns,
 		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
-	}
-
-	db, err := database.Connect(dbCfg, logger)
+		ConnMaxIdleTime: cfg.Database.ConnMaxIdleTime,
+		DialTimeout:     cfg.Database.DialTimeout,
+		ReadTimeout:     cfg.Database.ReadTimeout,
+		WriteTimeout:    cfg.Database.WriteTimeout,
+	}, logger)
 	if err != nil {
 		logger.Fatal("failed to connect database", zap.Error(err))
-		os.Exit(1)
 	}
 	defer database.Close(db)
 
@@ -70,74 +75,99 @@ func main() {
 		zap.String("host", cfg.Database.Host),
 		zap.Int("port", cfg.Database.Port),
 		zap.String("database", cfg.Database.Database),
+		zap.String("tls_mode", cfg.Database.TLSMode),
 	)
 
-	// 连接Redis
 	redisClient, err := redispkg.NewClient(redispkg.Config{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
+		Addr:               cfg.Redis.Addr,
+		Username:           cfg.Redis.Username,
+		Password:           cfg.Redis.Password,
+		DB:                 cfg.Redis.DB,
+		TLSEnabled:         cfg.Redis.TLSEnabled,
+		InsecureSkipVerify: cfg.Redis.InsecureSkipVerify,
+		ServerName:         cfg.Redis.ServerName,
+		CAFile:             cfg.Redis.CAFile,
+		CertFile:           cfg.Redis.CertFile,
+		KeyFile:            cfg.Redis.KeyFile,
+		DialTimeout:        cfg.Redis.DialTimeout,
+		ReadTimeout:        cfg.Redis.ReadTimeout,
+		WriteTimeout:       cfg.Redis.WriteTimeout,
+		PoolSize:           cfg.Redis.PoolSize,
+		MinIdleConns:       cfg.Redis.MinIdleConns,
+		MaxRetries:         cfg.Redis.MaxRetries,
+		StreamName:         cfg.Redis.StreamName,
+		ConsumerGroup:      cfg.Redis.ConsumerGroup,
+		ConsumerName:       cfg.Redis.ConsumerName,
+		PendingTimeout:     cfg.Redis.PendingTimeout,
+		BlockTimeout:       cfg.Redis.BlockTimeout,
 	})
 	if err != nil {
 		logger.Fatal("failed to connect redis", zap.Error(err))
-		os.Exit(1)
 	}
 	defer redisClient.Close()
 
-	logger.Info("redis connected", zap.String("addr", cfg.Redis.Addr))
+	logger.Info("redis connected",
+		zap.String("addr", cfg.Redis.Addr),
+		zap.Bool("tls_enabled", cfg.Redis.TLSEnabled),
+	)
 
-	// 初始化任务队列
 	taskQueue := queue.NewQueue(redisClient, logger.Named("queue"))
 	ctx := context.Background()
 	if err := taskQueue.Initialize(ctx); err != nil {
 		logger.Fatal("failed to initialize queue", zap.Error(err))
-		os.Exit(1)
 	}
 
-	// 创建加密器
 	encryptor, err := encryption.NewEncryptor(cfg.Security.AESKey)
 	if err != nil {
 		logger.Fatal("failed to create encryptor", zap.Error(err))
-		os.Exit(1)
 	}
 
-	// 创建Gin引擎
 	engine := gin.New()
-
-	// 设置路由
 	router := api.NewRouter(db, taskQueue, encryptor, cfg, logger.Named("api"))
 	router.Setup(engine)
 
-	// 启动HTTP服务器
+	idleTimeout := cfg.Server.Timeout * 2
+	if idleTimeout < cfg.Server.Timeout {
+		idleTimeout = cfg.Server.Timeout
+	}
+
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", *port),
+		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler:      engine,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  cfg.Server.Timeout,
+		WriteTimeout: cfg.Server.Timeout,
+		IdleTimeout:  idleTimeout,
 	}
 
 	go func() {
-		logger.Info("starting server", zap.Int("port", *port))
+		logger.Info("starting server",
+			zap.Int("port", cfg.Server.Port),
+			zap.String("mode", cfg.Server.Mode),
+		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("failed to start server", zap.Error(err))
 		}
 	}()
 
-	// 等待终止信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	logger.Info("shutting down server...")
+	logger.Info("shutting down server")
 
-	// 优雅关闭
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("server forced to shutdown", zap.Error(err))
 	}
 
 	logger.Info("server exited")
+}
+
+func newLogger(mode string) (*zap.Logger, error) {
+	if mode == gin.DebugMode {
+		return zap.NewDevelopment()
+	}
+	return zap.NewProduction()
 }

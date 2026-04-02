@@ -6,7 +6,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// TiDBConfig TiDB连接配置
+// TiDBConfig TiDB 连接配置
 type TiDBConfig struct {
 	ID                int64          `gorm:"primaryKey;autoIncrement" json:"id"`
 	TenantID          int64          `gorm:"not null;uniqueIndex:uk_tenant_name;index:idx_tenant_default;column:tenant_id" json:"tenant_id"`
@@ -17,6 +17,9 @@ type TiDBConfig struct {
 	PasswordEncrypted string         `gorm:"type:text;not null;column:password_encrypted" json:"-"`
 	Database          string         `gorm:"type:varchar(100)" json:"database"`
 	SSLMode           string         `gorm:"type:varchar(20);default:'disabled';column:ssl_mode" json:"ssl_mode"`
+	SSLCA             string         `gorm:"type:varchar(255);column:ssl_ca" json:"ssl_ca"`
+	SSLCert           string         `gorm:"type:varchar(255);column:ssl_cert" json:"ssl_cert"`
+	SSLKey            string         `gorm:"type:varchar(255);column:ssl_key" json:"ssl_key"`
 	Status            int8           `gorm:"type:tinyint;default:1" json:"status"`
 	IsDefault         int8           `gorm:"type:tinyint;default:0;index:idx_tenant_default;column:is_default" json:"is_default"`
 	CreatedAt         time.Time      `gorm:"precision:0" json:"created_at"`
@@ -32,11 +35,11 @@ func (TiDBConfig) TableName() string {
 type ProviderType string
 
 const (
-	ProviderAWS   ProviderType = "aws"
+	ProviderAWS    ProviderType = "aws"
 	ProviderAliyun ProviderType = "aliyun"
 )
 
-// S3Config S3存储配置
+// S3Config S3 存储配置
 type S3Config struct {
 	ID                 int64          `gorm:"primaryKey;autoIncrement" json:"id"`
 	TenantID           int64          `gorm:"not null;uniqueIndex:uk_tenant_name;index:idx_tenant_default;column:tenant_id" json:"tenant_id"`
@@ -59,7 +62,7 @@ func (S3Config) TableName() string {
 	return "s3_configs"
 }
 
-// DumplingTemplate Dumpling参数模板
+// DumplingTemplate Dumpling 参数模板
 type DumplingTemplate struct {
 	ID          int64          `gorm:"primaryKey;autoIncrement" json:"id"`
 	TenantID    int64          `gorm:"not null;uniqueIndex:uk_tenant_name;column:tenant_id" json:"tenant_id"`

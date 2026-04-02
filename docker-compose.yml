@@ -13,6 +13,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
       - ./backend/migrations/init.sh:/docker-entrypoint-initdb.d/01_init.sh:ro
+      - ./backend/migrations/up:/docker-entrypoint-initdb.d/up:ro
     ports:
       - "${MYSQL_PORT:-3306}:3306"
     healthcheck:
@@ -49,8 +50,8 @@ services:
       - mysql
       - redis
     environment:
-      - APP_ENV=${APP_ENV:-production}
-      - APP_PORT=${APP_PORT:-8080}
+      - SERVER_MODE=${SERVER_MODE:-release}
+      - SERVER_PORT=8080
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=${MYSQL_USER:-claw}
@@ -106,7 +107,7 @@ services:
       - mysql
       - redis
     environment:
-      - APP_ENV=${APP_ENV:-production}
+      - SERVER_MODE=${SERVER_MODE:-release}
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=${MYSQL_USER:-claw}
@@ -114,9 +115,11 @@ services:
       - DB_NAME=${MYSQL_DATABASE:-claw_export}
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-redis123}
+      - REDIS_CONSUMER_NAME=local-worker
       - AES_KEY=${AES_KEY:-claw-export-aes-key-32-bytes!!!!}
       - DUMPLING_PATH=/usr/local/bin/dumpling
       - WORKER_COUNT=${WORKER_COUNT:-4}
+      - WORK_DIR=/tmp/exports
     volumes:
       - ${HOST_DUMPLING_PATH:-/usr/local/bin/dumpling}:/usr/local/bin/dumpling:ro
       - tmp_data:/tmp/exports

@@ -218,19 +218,17 @@ func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password,
 		args = append(args, fmt.Sprintf("--database=%s", tidbConfig.Database))
 	}
 
-	// 文件类型
 	if filetype == "csv" {
 		args = append(args, "--filetype=csv")
 	} else {
 		args = append(args, "--filetype=sql")
 	}
 
-	// 压缩
 	if compress != "" {
 		args = append(args, fmt.Sprintf("--compress=%s", compress))
 	}
 
-	// 其他默认参数
+	args = append(args, e.buildDumplingTLSArgs(tidbConfig)...)
 	args = append(args,
 		"--threads=4",
 		"--rows=100000",
@@ -238,6 +236,33 @@ func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password,
 	)
 
 	return exec.Command(dumplingPath, args...)
+}
+
+func (e *Executor) buildDumplingTLSArgs(tidbConfig *models.TiDBConfig) []string {
+	sslMode := strings.ToLower(strings.TrimSpace(tidbConfig.SSLMode))
+	if sslMode == "" || sslMode == "disabled" {
+		return nil
+	}
+
+	var args []string
+	if tidbConfig.SSLCA != "" {
+		args = append(args, fmt.Sprintf("--ca=%s", tidbConfig.SSLCA))
+	}
+	if tidbConfig.SSLCert != "" {
+		args = append(args, fmt.Sprintf("--cert=%s", tidbConfig.SSLCert))
+	}
+	if tidbConfig.SSLKey != "" {
+		args = append(args, fmt.Sprintf("--key=%s", tidbConfig.SSLKey))
+	}
+
+	if len(args) == 0 {
+		e.logger.Warn("tidb ssl_mode is enabled but no dumpling TLS files are configured",
+			zap.String("ssl_mode", tidbConfig.SSLMode),
+			zap.String("host", tidbConfig.Host),
+		)
+	}
+
+	return args
 }
 
 func (e *Executor) logTaskError(ctx context.Context, taskID int64, output string, err error) {
@@ -266,7 +291,7 @@ func truncate(s string, maxLen int) string {
 // ValidateSQL 验证SQL语句安全性
 func ValidateSQL(sqlText string) error {
 	sqlUpper := strings.ToUpper(sqlText)
-	
+
 	// 危险关键字检查
 	dangerousKeywords := []string{
 		"DROP", "DELETE", "TRUNCATE", "ALTER", "CREATE", "INSERT", "UPDATE",

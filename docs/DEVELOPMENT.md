@@ -46,8 +46,10 @@
 # ============================================
 # 应用配置
 # ============================================
-APP_ENV=production              # 环境：development/staging/production
-APP_PORT=8080                   # 后端服务端口
+SERVER_MODE=release             # 可选：debug / release
+SERVER_PORT=8080                # 后端服务端口
+SERVER_TIMEOUT=30s              # HTTP 读写超时
+SERVER_SHUTDOWN_TIMEOUT=10s     # 优雅停机超时
 
 # ============================================
 # 数据库配置
@@ -73,7 +75,7 @@ JWT_SECRET=your-super-secret-jwt-key-change-in-production
 # AES 加密密钥：必须是正好 32 字节的字符串
 # 注意：长度必须正好 32 字节（用于 AES-256 加密）
 # 生成方法：openssl rand -base64 32 | head -c 32
-AES_KEY=claw-export-aes-key-32-bytes!!!!
+AES_KEY=0123456789abcdef0123456789abcdef
 
 # ============================================
 # 服务端口
@@ -124,7 +126,11 @@ VITE_API_BASE_URL=http://localhost:8080
 
 ## 部署方式
 
-### 方式一：一键部署（推荐）
+> 当前仓库保留两类研发部署方式：
+> 1. 本地 MVP / 联调：使用 `docker-compose.yml` + `deploy.sh`
+> 2. 测试环境直连云资源：使用 `.env.test` + `docker-compose.test.yml`
+
+### 方式一：本地 Docker 一键部署（推荐用于开发/联调）
 
 #### 自动初始化说明
 
@@ -214,7 +220,46 @@ docker-compose down -v
 docker-compose up -d
 ```
 
-### 方式二：手动部署
+### 方式二：测试环境 Docker Compose（直连阿里云 TiDB / Redis）
+
+#### 适用场景
+
+- 研发自行验证测试环境
+- 只想保留一个 `.env.test` 和一个 `docker-compose.test.yml`
+- 不在测试环境启动本地 `mysql` / `redis` 容器
+- 直接连接阿里云 `TiDB` 与云 `Redis`
+
+#### 需要修改的文件
+
+- `.env.test`：填写测试环境云资源连接参数
+- `docker-compose.test.yml`：启动 `frontend` / `backend` / `worker` / `migrate`
+- `backend/Dockerfile.migrate`：构建迁移镜像
+
+#### 推荐命令
+
+```bash
+# 1. 修改测试环境变量
+vim .env.test
+
+# 2. 先执行迁移
+docker compose --env-file .env.test -f docker-compose.test.yml run --rm migrate
+
+# 3. 启动测试环境服务
+docker compose --env-file .env.test -f docker-compose.test.yml up -d --build backend worker frontend
+
+# 4. 查看状态与日志
+docker compose --env-file .env.test -f docker-compose.test.yml ps
+docker compose --env-file .env.test -f docker-compose.test.yml logs -f backend worker frontend
+```
+
+#### TiDB 初始化与升级策略
+
+- 所有初始化与升级 SQL 统一位于 `backend/migrations/up/*.sql`
+- `000001_init_schema.up.sql` 已更新为 TiDB 兼容基线
+- `000005_seed_default_admin.up.sql` 会幂等插入默认管理员 `admin / admin123`
+- `migrate` 服务会调用 `backend/main.go` 中的迁移入口执行 SQL 文件
+
+### 方式三：本地 Docker 手动部署
 
 ```bash
 # 1. 创建网络
@@ -339,87 +384,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o claw-export cmd/server/main.go
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o claw-worker cmd/worker/main.go
 ```
 
-#### 2. Systemd 服务配置
+#### 2. 说明
 
-```ini
-# /etc/systemd/system/claw-export.service
-[Unit]
-Description=Claw Export Platform Backend
-After=network.target mysql.service redis.service
-
-[Service]
-Type=simple
-User=claw
-Group=claw
-WorkingDirectory=/opt/claw-export
-ExecStart=/opt/claw-export/claw-export
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-# 环境变量
-Environment=APP_ENV=production
-Environment=DB_HOST=localhost
-Environment=DB_PORT=3306
-Environment=DB_USER=claw
-Environment=DB_PASSWORD=your-password
-Environment=REDIS_ADDR=localhost:6379
-Environment=REDIS_PASSWORD=your-redis-password
-Environment=JWT_SECRET=your-jwt-secret
-Environment=AES_KEY=your-32-byte-aes-key-here!!!!!!
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```ini
-# /etc/systemd/system/claw-worker.service
-[Unit]
-Description=Claw Export Platform Worker
-After=network.target mysql.service redis.service
-
-[Service]
-Type=simple
-User=claw
-Group=claw
-WorkingDirectory=/opt/claw-export
-ExecStart=/opt/claw-export/claw-worker
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-# 环境变量
-Environment=APP_ENV=production
-Environment=DB_HOST=localhost
-Environment=DB_PORT=3306
-Environment=DB_USER=claw
-Environment=DB_PASSWORD=your-password
-Environment=REDIS_ADDR=localhost:6379
-Environment=REDIS_PASSWORD=your-redis-password
-Environment=AES_KEY=your-32-byte-aes-key-here!!!!!!
-Environment=WORKER_COUNT=4
-Environment=DUMPLING_PATH=/usr/local/bin/dumpling
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-# 启用服务
-sudo systemctl daemon-reload
-sudo systemctl enable claw-export claw-worker
-sudo systemctl start claw-export claw-worker
-
-# 查看状态
-sudo systemctl status claw-export
-sudo systemctl status claw-worker
-
-# 查看日志
-sudo journalctl -u claw-export -f
-sudo journalctl -u claw-worker -f
-```
+仓库当前只内置本地开发与测试环境直连云资源的 Compose 方案。
+如需正式交付链路（如 `systemd`、`Jenkins`、宿主机 `Nginx`），请由运维团队按目标环境单独维护。
 
 #### 3. Kubernetes 部署
 
@@ -446,8 +414,8 @@ spec:
         ports:
         - containerPort: 8080
         env:
-        - name: APP_ENV
-          value: "production"
+        - name: SERVER_MODE
+          value: "release"
         - name: DB_HOST
           valueFrom:
             secretKeyRef:
@@ -762,14 +730,15 @@ curl http://localhost:8080/health
 
 ```
 backend/migrations/
-├── init.sh                           # 自动初始化脚本（Docker 用）
+├── init.sh                              # Docker 首次启动时按顺序执行 up/*.sql
 ├── up/
-│   ├── 000001_init_schema.up.sql     # 初始化表结构 SQL
-│   ├── 000002_drop_foreign_keys.up.sql  # 删除外键约束（可选）
-│   ├── 000003_add_missing_columns.up.sql  # 添加缺失字段
-│   └── 000004_add_s3_provider.up.sql  # 添加多云存储厂商支持
+│   ├── 000001_init_schema.up.sql        # TiDB 兼容基线表结构
+│   ├── 000002_drop_foreign_keys.up.sql  # 历史兼容修复
+│   ├── 000003_add_missing_columns.up.sql  # 幂等补字段
+│   ├── 000004_add_s3_provider.up.sql    # 幂等补 provider 字段
+│   └── 000005_seed_default_admin.up.sql # 幂等初始化默认管理员
 └── down/
-    ├── 000001_init_schema.down.sql   # 回滚脚本
+    ├── 000001_init_schema.down.sql      # 回滚脚本
     ├── 000002_drop_foreign_keys.down.sql
     ├── 000003_add_missing_columns.down.sql
     └── 000004_add_s3_provider.down.sql
@@ -778,14 +747,16 @@ backend/migrations/
 #### 手动执行迁移
 
 ```bash
-# 方式一：使用部署脚本
+# 本地 Docker
 ./deploy.sh migrate
 
-# 方式二：通过 MySQL 容器执行
-docker exec claw-mysql bash /docker-entrypoint-initdb.d/01_init.sh
+# 生产环境（推荐）
+cd backend
+go run . -action up -dir migrations/up
 
-# 方式三：直接执行 SQL
-docker exec -i claw-mysql mysql -uroot -proot123 claw_export < backend/migrations/up/000003_add_missing_columns.up.sql
+# 查看迁移状态
+cd backend
+go run . -action status -dir migrations/up
 ```
 
 #### 添加新迁移
@@ -800,9 +771,9 @@ CREATE TABLE IF NOT EXISTS new_table (
 );
 ```
 
-2. 更新 `init.sh` 添加新的 SQL 语句
+2. 无需手工修改 `init.sh`，Docker 初始化脚本会自动顺序执行 `up/*.sql`
 
-3. 重新部署服务
+3. 本地执行 `./deploy.sh migrate` 或生产执行 `go run . -action up -dir migrations/up`
 
 ---
 

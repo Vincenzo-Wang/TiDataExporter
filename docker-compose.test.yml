@@ -1,0 +1,125 @@
+x-app-env: &app-env
+  SERVER_MODE: ${SERVER_MODE:-release}
+  SERVER_PORT: 8080
+  SERVER_TIMEOUT: ${SERVER_TIMEOUT:-30s}
+  SERVER_SHUTDOWN_TIMEOUT: ${SERVER_SHUTDOWN_TIMEOUT:-10s}
+  DB_HOST: ${DB_HOST}
+  DB_PORT: ${DB_PORT:-4000}
+  DB_USER: ${DB_USER}
+  DB_PASSWORD: ${DB_PASSWORD}
+  DB_NAME: ${DB_NAME:-claw_export}
+  DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+  DB_LOC: ${DB_LOC:-Asia/Shanghai}
+  DB_TLS_MODE: ${DB_TLS_MODE:-required}
+  DB_TLS_SERVER_NAME: ${DB_TLS_SERVER_NAME:-}
+  DB_TLS_CA_FILE: ${DB_TLS_CA_FILE:-}
+  DB_TLS_CERT_FILE: ${DB_TLS_CERT_FILE:-}
+  DB_TLS_KEY_FILE: ${DB_TLS_KEY_FILE:-}
+  DB_MAX_OPEN_CONNS: ${DB_MAX_OPEN_CONNS:-50}
+  DB_MAX_IDLE_CONNS: ${DB_MAX_IDLE_CONNS:-10}
+  DB_CONN_MAX_LIFETIME: ${DB_CONN_MAX_LIFETIME:-1h}
+  DB_CONN_MAX_IDLE_TIME: ${DB_CONN_MAX_IDLE_TIME:-10m}
+  DB_DIAL_TIMEOUT: ${DB_DIAL_TIMEOUT:-10s}
+  DB_READ_TIMEOUT: ${DB_READ_TIMEOUT:-30s}
+  DB_WRITE_TIMEOUT: ${DB_WRITE_TIMEOUT:-30s}
+  REDIS_ADDR: ${REDIS_ADDR}
+  REDIS_USERNAME: ${REDIS_USERNAME:-}
+  REDIS_PASSWORD: ${REDIS_PASSWORD}
+  REDIS_DB: ${REDIS_DB:-0}
+  REDIS_TLS_ENABLED: ${REDIS_TLS_ENABLED:-true}
+  REDIS_TLS_INSECURE_SKIP_VERIFY: ${REDIS_TLS_INSECURE_SKIP_VERIFY:-false}
+  REDIS_TLS_SERVER_NAME: ${REDIS_TLS_SERVER_NAME:-}
+  REDIS_TLS_CA_FILE: ${REDIS_TLS_CA_FILE:-}
+  REDIS_TLS_CERT_FILE: ${REDIS_TLS_CERT_FILE:-}
+  REDIS_TLS_KEY_FILE: ${REDIS_TLS_KEY_FILE:-}
+  REDIS_DIAL_TIMEOUT: ${REDIS_DIAL_TIMEOUT:-5s}
+  REDIS_READ_TIMEOUT: ${REDIS_READ_TIMEOUT:-10s}
+  REDIS_WRITE_TIMEOUT: ${REDIS_WRITE_TIMEOUT:-10s}
+  REDIS_POOL_SIZE: ${REDIS_POOL_SIZE:-20}
+  REDIS_MIN_IDLE_CONNS: ${REDIS_MIN_IDLE_CONNS:-5}
+  REDIS_MAX_RETRIES: ${REDIS_MAX_RETRIES:-3}
+  REDIS_STREAM_NAME: ${REDIS_STREAM_NAME:-export:tasks}
+  REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-export-workers}
+  REDIS_PENDING_TIMEOUT: ${REDIS_PENDING_TIMEOUT:-30m}
+  REDIS_BLOCK_TIMEOUT: ${REDIS_BLOCK_TIMEOUT:-5s}
+  JWT_SECRET: ${JWT_SECRET}
+  AES_KEY: ${AES_KEY}
+  JWT_TOKEN_EXPIRE_HOUR: ${JWT_TOKEN_EXPIRE_HOUR:-24}
+  BCRYPT_COST: ${BCRYPT_COST:-10}
+  DUMPLING_PATH: ${DUMPLING_PATH:-/usr/local/bin/dumpling}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+  S3_ENDPOINT: ${S3_ENDPOINT:-}
+  S3_REGION: ${S3_REGION:-oss-cn-hangzhou}
+  S3_BUCKET: ${S3_BUCKET:-}
+
+services:
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.migrate
+    container_name: ${COMPOSE_PROJECT_NAME:-claw-test}-migrate
+    environment:
+      <<: *app-env
+      WORKER_COUNT: ${WORKER_COUNT:-1}
+      WORK_DIR: /tmp/exports
+    command: ["-action", "up", "-dir", "/app/migrations/up"]
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-claw-test}-backend
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+    ports:
+      - "${BACKEND_HOST_PORT:-18081}:8080"
+    volumes:
+      - ${HOST_DUMPLING_PATH:-/usr/local/bin/dumpling}:/usr/local/bin/dumpling:ro
+      - tmp_data:/tmp/exports
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-claw-test}-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-18080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: ${COMPOSE_PROJECT_NAME:-claw-test}-worker
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      REDIS_CONSUMER_NAME: ${REDIS_CONSUMER_NAME:-claw-worker-test-01}
+      WORKER_COUNT: ${WORKER_COUNT:-2}
+      WORK_DIR: /tmp/exports
+      WORKER_TASK_TIMEOUT: ${WORKER_TASK_TIMEOUT:-2h}
+      WORKER_TIMEOUT_CHECK_INTERVAL: ${WORKER_TIMEOUT_CHECK_INTERVAL:-1m}
+      WORKER_CLEANUP_INTERVAL: ${WORKER_CLEANUP_INTERVAL:-1h}
+      WORKER_LOG_RETENTION: ${WORKER_LOG_RETENTION:-720h}
+    volumes:
+      - ${HOST_DUMPLING_PATH:-/usr/local/bin/dumpling}:/usr/local/bin/dumpling:ro
+      - tmp_data:/tmp/exports
+    user: "0:0"
+
+volumes:
+  tmp_data:
+    driver: local

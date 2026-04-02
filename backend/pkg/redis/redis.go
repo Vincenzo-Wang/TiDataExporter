@@ -2,66 +2,159 @@ package redis
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	goredis "github.com/redis/go-redis/v9"
 )
 
-// Config Redis配置
+// Config Redis 配置
 type Config struct {
-	Addr     string
-	Password string
-	DB       int
+	Addr               string
+	Username           string
+	Password           string
+	DB                 int
+	TLSEnabled         bool
+	InsecureSkipVerify bool
+	ServerName         string
+	CAFile             string
+	CertFile           string
+	KeyFile            string
+	DialTimeout        time.Duration
+	ReadTimeout        time.Duration
+	WriteTimeout       time.Duration
+	PoolSize           int
+	MinIdleConns       int
+	MaxRetries         int
+	StreamName         string
+	ConsumerGroup      string
+	ConsumerName       string
+	PendingTimeout     time.Duration
+	BlockTimeout       time.Duration
 }
 
-// Client Redis客户端包装
+// Client Redis 客户端包装
 type Client struct {
-	*redis.Client
+	*goredis.Client
+	cfg Config
 }
 
-// NewClient 创建Redis客户端
+// NewClient 创建 Redis 客户端
 func NewClient(cfg Config) (*Client, error) {
-	client := redis.NewClient(&redis.Options{
+	cfg = withDefaults(cfg)
+
+	options := &goredis.Options{
 		Addr:         cfg.Addr,
+		Username:     cfg.Username,
 		Password:     cfg.Password,
 		DB:           cfg.DB,
-		DialTimeout:  5 * time.Second,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		PoolSize:     20,
-		MinIdleConns: 5,
-	})
+		DialTimeout:  cfg.DialTimeout,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		PoolSize:     cfg.PoolSize,
+		MinIdleConns: cfg.MinIdleConns,
+		MaxRetries:   cfg.MaxRetries,
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if cfg.TLSEnabled {
+		tlsConfig, err := buildTLSConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		options.TLSConfig = tlsConfig
+	}
+
+	client := goredis.NewClient(options)
+
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.DialTimeout)
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("failed to connect to redis: %w", err)
 	}
 
-	return &Client{client}, nil
+	return &Client{Client: client, cfg: cfg}, nil
 }
 
-// StreamName 任务队列流名称
-const (
-	StreamName       = "export:tasks"
-	ConsumerGroup    = "export-workers"
-	ConsumerName     = "worker-1"
-	PendingTimeout   = 30 * time.Minute
-	ClaimInterval    = 5 * time.Minute
-	BlockTimeout     = 5 * time.Second
-)
+func withDefaults(cfg Config) Config {
+	if cfg.DialTimeout <= 0 {
+		cfg.DialTimeout = 5 * time.Second
+	}
+	if cfg.ReadTimeout <= 0 {
+		cfg.ReadTimeout = 10 * time.Second
+	}
+	if cfg.WriteTimeout <= 0 {
+		cfg.WriteTimeout = 10 * time.Second
+	}
+	if cfg.PoolSize <= 0 {
+		cfg.PoolSize = 20
+	}
+	if cfg.MinIdleConns <= 0 {
+		cfg.MinIdleConns = 5
+	}
+	if cfg.MaxRetries < 0 {
+		cfg.MaxRetries = 0
+	}
+	if strings.TrimSpace(cfg.StreamName) == "" {
+		cfg.StreamName = "export:tasks"
+	}
+	if strings.TrimSpace(cfg.ConsumerGroup) == "" {
+		cfg.ConsumerGroup = "export-workers"
+	}
+	if cfg.PendingTimeout <= 0 {
+		cfg.PendingTimeout = 30 * time.Minute
+	}
+	if cfg.BlockTimeout <= 0 {
+		cfg.BlockTimeout = 5 * time.Second
+	}
+	return cfg
+}
 
-// EnsureStreamAndGroup 确保Stream和Consumer Group存在
-func (c *Client) EnsureStreamAndGroup(ctx context.Context) error {
-	// 创建Stream（如果不存在）
-	err := c.XGroupCreateMkStream(ctx, StreamName, ConsumerGroup, "0").Err()
-	if err != nil {
-		// 如果group已存在，忽略错误
-		if err.Error() != "BUSYGROUP Consumer Group name already exists" {
-			return fmt.Errorf("failed to create consumer group: %w", err)
+func buildTLSConfig(cfg Config) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		ServerName:         strings.TrimSpace(cfg.ServerName),
+	}
+
+	if strings.TrimSpace(cfg.CAFile) != "" {
+		caPEM, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read REDIS TLS CA file: %w", err)
 		}
+		rootCAs, err := x509.SystemCertPool()
+		if err != nil || rootCAs == nil {
+			rootCAs = x509.NewCertPool()
+		}
+		if !rootCAs.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("failed to parse REDIS TLS CA file")
+		}
+		tlsConfig.RootCAs = rootCAs
+	}
+
+	if strings.TrimSpace(cfg.CertFile) != "" || strings.TrimSpace(cfg.KeyFile) != "" {
+		if strings.TrimSpace(cfg.CertFile) == "" || strings.TrimSpace(cfg.KeyFile) == "" {
+			return nil, fmt.Errorf("REDIS_TLS_CERT_FILE and REDIS_TLS_KEY_FILE must be configured together")
+		}
+		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load REDIS TLS client certificate: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+
+	return tlsConfig, nil
+}
+
+// EnsureStreamAndGroup 确保 Stream 和 Consumer Group 存在
+func (c *Client) EnsureStreamAndGroup(ctx context.Context) error {
+	err := c.XGroupCreateMkStream(ctx, c.cfg.StreamName, c.cfg.ConsumerGroup, "0").Err()
+	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
+		return fmt.Errorf("failed to create consumer group: %w", err)
 	}
 	return nil
 }
@@ -72,26 +165,31 @@ type StreamMessage struct {
 	Fields map[string]interface{}
 }
 
-// AddMessage 向Stream添加消息
+// AddMessage 向 Stream 添加消息
 func (c *Client) AddMessage(ctx context.Context, fields map[string]interface{}) (string, error) {
-	return c.XAdd(ctx, &redis.XAddArgs{
-		Stream: StreamName,
+	return c.XAdd(ctx, &goredis.XAddArgs{
+		Stream: c.cfg.StreamName,
 		Values: fields,
 	}).Result()
 }
 
-// ReadMessages 从Stream读取消息
+// ReadMessages 从 Stream 读取消息
 func (c *Client) ReadMessages(ctx context.Context, count int64) ([]StreamMessage, error) {
-	streams, err := c.XReadGroup(ctx, &redis.XReadGroupArgs{
-		Group:    ConsumerGroup,
-		Consumer: ConsumerName,
-		Streams:  []string{StreamName, ">"},
+	consumerName := strings.TrimSpace(c.cfg.ConsumerName)
+	if consumerName == "" {
+		return nil, fmt.Errorf("redis consumer name is required")
+	}
+
+	streams, err := c.XReadGroup(ctx, &goredis.XReadGroupArgs{
+		Group:    c.cfg.ConsumerGroup,
+		Consumer: consumerName,
+		Streams:  []string{c.cfg.StreamName, ">"},
 		Count:    count,
-		Block:    BlockTimeout,
+		Block:    c.cfg.BlockTimeout,
 	}).Result()
 	if err != nil {
-		if err == redis.Nil {
-			return nil, nil // 无消息
+		if err == goredis.Nil {
+			return nil, nil
 		}
 		return nil, err
 	}
@@ -110,27 +208,32 @@ func (c *Client) ReadMessages(ctx context.Context, count int64) ([]StreamMessage
 
 // AckMessage 确认消息已处理
 func (c *Client) AckMessage(ctx context.Context, msgID string) error {
-	return c.XAck(ctx, StreamName, ConsumerGroup, msgID).Err()
+	return c.XAck(ctx, c.cfg.StreamName, c.cfg.ConsumerGroup, msgID).Err()
 }
 
-// GetPendingMessages 获取待处理的消息（用于超时恢复）
-func (c *Client) GetPendingMessages(ctx context.Context) ([]redis.XPendingExt, error) {
-	return c.XPendingExt(ctx, &redis.XPendingExtArgs{
-		Stream:   StreamName,
-		Group:    ConsumerGroup,
-		Start:    "-",
-		End:      "+",
-		Count:    100,
+// GetPendingMessages 获取待处理消息
+func (c *Client) GetPendingMessages(ctx context.Context) ([]goredis.XPendingExt, error) {
+	return c.XPendingExt(ctx, &goredis.XPendingExtArgs{
+		Stream: c.cfg.StreamName,
+		Group:  c.cfg.ConsumerGroup,
+		Start:  "-",
+		End:    "+",
+		Count:  100,
 	}).Result()
 }
 
 // ClaimMessage 认领超时消息
-func (c *Client) ClaimMessage(ctx context.Context, msgID string) (*redis.XMessage, error) {
-	messages, err := c.XClaim(ctx, &redis.XClaimArgs{
-		Stream:   StreamName,
-		Group:    ConsumerGroup,
-		Consumer: ConsumerName,
-		MinIdle:  PendingTimeout,
+func (c *Client) ClaimMessage(ctx context.Context, msgID string) (*goredis.XMessage, error) {
+	consumerName := strings.TrimSpace(c.cfg.ConsumerName)
+	if consumerName == "" {
+		return nil, fmt.Errorf("redis consumer name is required")
+	}
+
+	messages, err := c.XClaim(ctx, &goredis.XClaimArgs{
+		Stream:   c.cfg.StreamName,
+		Group:    c.cfg.ConsumerGroup,
+		Consumer: consumerName,
+		MinIdle:  c.cfg.PendingTimeout,
 		Messages: []string{msgID},
 	}).Result()
 	if err != nil {
@@ -144,7 +247,17 @@ func (c *Client) ClaimMessage(ctx context.Context, msgID string) (*redis.XMessag
 
 // DeleteMessage 删除消息
 func (c *Client) DeleteMessage(ctx context.Context, msgID string) error {
-	return c.XDel(ctx, StreamName, msgID).Err()
+	return c.XDel(ctx, c.cfg.StreamName, msgID).Err()
+}
+
+// PendingTimeout 返回超时认领阈值
+func (c *Client) PendingTimeout() time.Duration {
+	return c.cfg.PendingTimeout
+}
+
+// ConsumerName 返回消费者名称
+func (c *Client) ConsumerName() string {
+	return c.cfg.ConsumerName
 }
 
 // Close 关闭连接

@@ -221,20 +221,20 @@ func (r *Router) listTenants(c *gin.Context) {
 	for i, t := range tenants {
 		quota := quotaMap[t.ID]
 		items[i] = gin.H{
-			"id":                t.ID,
-			"name":              t.Name,
-			"code":              t.Code,
-			"contact_email":     t.ContactEmail,
-			"api_key":           t.APIKey,
-			"status":            t.Status,
-			"quota_daily":       quota.MaxDailyTasks,
-			"quota_monthly":     quota.MaxDailyTasks * 30, // 月配额按日配额*30计算
-			"quota_used_today":  dailyCountMap[t.ID],
-			"quota_used_month":  monthlyCountMap[t.ID],
-			"max_concurrent":    quota.MaxConcurrentTasks,
-			"max_size_gb":       quota.MaxDailySizeGB,
-			"retention_hours":   quota.MaxRetentionHours,
-			"created_at":        t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"id":               t.ID,
+			"name":             t.Name,
+			"code":             t.Code,
+			"contact_email":    t.ContactEmail,
+			"api_key":          t.APIKey,
+			"status":           t.Status,
+			"quota_daily":      quota.MaxDailyTasks,
+			"quota_monthly":    quota.MaxDailyTasks * 30, // 月配额按日配额*30计算
+			"quota_used_today": dailyCountMap[t.ID],
+			"quota_used_month": monthlyCountMap[t.ID],
+			"max_concurrent":   quota.MaxConcurrentTasks,
+			"max_size_gb":      quota.MaxDailySizeGB,
+			"retention_hours":  quota.MaxRetentionHours,
+			"created_at":       t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		}
 	}
 
@@ -325,17 +325,17 @@ func (r *Router) createTenant(c *gin.Context) {
 		"code":    0,
 		"message": "租户创建成功",
 		"data": gin.H{
-			"id":          tenant.ID,
-			"tenant_id":   tenant.ID,
-			"api_key":     apiKey,
-			"api_secret":  apiSecret, // 只在创建时返回一次
-			"name":        tenant.Name,
-			"code":        tenant.Code,
+			"id":            tenant.ID,
+			"tenant_id":     tenant.ID,
+			"api_key":       apiKey,
+			"api_secret":    apiSecret, // 只在创建时返回一次
+			"name":          tenant.Name,
+			"code":          tenant.Code,
 			"contact_email": tenant.ContactEmail,
-			"status":      tenant.Status,
-			"quota_daily": req.QuotaDaily,
+			"status":        tenant.Status,
+			"quota_daily":   req.QuotaDaily,
 			"quota_monthly": req.QuotaMonthly,
-			"created_at": tenant.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"created_at":    tenant.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		},
 	})
 }
@@ -578,25 +578,25 @@ func (r *Router) listTasks(c *gin.Context) {
 	items := make([]gin.H, len(tasks))
 	for i, task := range tasks {
 		item := gin.H{
-			"task_id":          task.ID,
-			"task_name":        task.TaskName,
-			"tenant_id":        task.TenantID,
-			"tidb_config_id":   task.TiDBConfigID,
-			"s3_config_id":     task.S3ConfigID,
-			"filetype":         task.Filetype,
-			"compress":         task.Compress,
-			"retention_hours":  task.RetentionHours,
-			"priority":         task.Priority,
-			"status":           task.Status,
-			"progress":         calculateProgress(task),
-			"file_url":         task.FileURL,
-			"file_size":        task.FileSize,
-			"row_count":        task.RowCount,
-			"retry_count":      task.RetryCount,
-			"max_retries":      task.MaxRetries,
-			"error_message":    task.ErrorMessage,
-			"created_at":       task.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			"updated_at":       task.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"task_id":         task.ID,
+			"task_name":       task.TaskName,
+			"tenant_id":       task.TenantID,
+			"tidb_config_id":  task.TiDBConfigID,
+			"s3_config_id":    task.S3ConfigID,
+			"filetype":        task.Filetype,
+			"compress":        task.Compress,
+			"retention_hours": task.RetentionHours,
+			"priority":        task.Priority,
+			"status":          task.Status,
+			"progress":        calculateProgress(task),
+			"file_url":        task.FileURL,
+			"file_size":       task.FileSize,
+			"row_count":       task.RowCount,
+			"retry_count":     task.RetryCount,
+			"max_retries":     task.MaxRetries,
+			"error_message":   task.ErrorMessage,
+			"created_at":      task.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"updated_at":      task.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		}
 
 		// 添加租户名称
@@ -797,18 +797,21 @@ func (r *Router) listTiDBConfigs(c *gin.Context) {
 	items := make([]gin.H, len(configs))
 	for i, cfg := range configs {
 		items[i] = gin.H{
-			"id":          cfg.ID,
-			"tenant_id":   cfg.TenantID,
-			"name":        cfg.Name,
-			"host":        cfg.Host,
-			"port":        cfg.Port,
-			"username":    cfg.Username,
-			"database":    cfg.Database,
-			"ssl_mode":    cfg.SSLMode,
-			"status":      cfg.Status,
-			"is_default":  cfg.IsDefault,
-			"created_at":  cfg.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			"updated_at":  cfg.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"id":         cfg.ID,
+			"tenant_id":  cfg.TenantID,
+			"name":       cfg.Name,
+			"host":       cfg.Host,
+			"port":       cfg.Port,
+			"username":   cfg.Username,
+			"database":   cfg.Database,
+			"ssl_mode":   cfg.SSLMode,
+			"ssl_ca":     cfg.SSLCA,
+			"ssl_cert":   cfg.SSLCert,
+			"ssl_key":    cfg.SSLKey,
+			"status":     cfg.Status,
+			"is_default": cfg.IsDefault,
+			"created_at": cfg.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"updated_at": cfg.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		}
 	}
 
@@ -830,6 +833,9 @@ type createTiDBConfigRequest struct {
 	Password string `json:"password" binding:"required"`
 	Database string `json:"database" binding:"required"`
 	SSLMode  string `json:"ssl_mode"`
+	SSLCA    string `json:"ssl_ca"`
+	SSLCert  string `json:"ssl_cert"`
+	SSLKey   string `json:"ssl_key"`
 	Status   int8   `json:"status"`
 }
 
@@ -868,6 +874,9 @@ func (r *Router) createTiDBConfig(c *gin.Context) {
 		PasswordEncrypted: passwordEncrypted,
 		Database:          req.Database,
 		SSLMode:           req.SSLMode,
+		SSLCA:             req.SSLCA,
+		SSLCert:           req.SSLCert,
+		SSLKey:            req.SSLKey,
 		Status:            req.Status,
 	}
 
@@ -888,6 +897,9 @@ type updateTiDBConfigRequest struct {
 	Password string `json:"password"`
 	Database string `json:"database"`
 	SSLMode  string `json:"ssl_mode"`
+	SSLCA    string `json:"ssl_ca"`
+	SSLCert  string `json:"ssl_cert"`
+	SSLKey   string `json:"ssl_key"`
 	Status   int8   `json:"status"`
 }
 
@@ -941,6 +953,15 @@ func (r *Router) updateTiDBConfig(c *gin.Context) {
 	}
 	if req.SSLMode != "" {
 		updates["ssl_mode"] = req.SSLMode
+	}
+	if req.SSLCA != "" {
+		updates["ssl_ca"] = req.SSLCA
+	}
+	if req.SSLCert != "" {
+		updates["ssl_cert"] = req.SSLCert
+	}
+	if req.SSLKey != "" {
+		updates["ssl_key"] = req.SSLKey
 	}
 	if req.Status != 0 {
 		updates["status"] = req.Status

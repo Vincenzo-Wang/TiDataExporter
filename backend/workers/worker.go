@@ -12,7 +12,6 @@ import (
 	"claw-export-platform/models"
 	"claw-export-platform/pkg/encryption"
 	"claw-export-platform/pkg/queue"
-	redispkg "claw-export-platform/pkg/redis"
 	"claw-export-platform/services/export"
 
 	"go.uber.org/zap"
@@ -247,7 +246,7 @@ func (w *Worker) checkPendingMessages() {
 
 	for _, p := range pending {
 		// 检查是否超时
-		if p.Idle < redispkg.PendingTimeout {
+		if p.Idle < w.queue.PendingTimeout() {
 			continue
 		}
 
