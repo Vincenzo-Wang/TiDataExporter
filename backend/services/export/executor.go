@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -257,11 +258,17 @@ func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password,
 	}
 
 	args = append(args, e.buildDumplingTLSArgs(tidbConfig)...)
+
+	threads := getPositiveIntEnv("DUMPLING_THREADS", 8)
+	rows := getPositiveIntEnv("DUMPLING_ROWS", 200000)
+	consistency := getNonEmptyEnv("DUMPLING_CONSISTENCY", "auto")
+	fileSize := getNonEmptyEnv("DUMPLING_FILE_SIZE", "100M")
+
 	args = append(args,
-		"--threads=8",
-		"--rows=200000",
-		"--consistency=auto",
-		"-F=100M",
+		fmt.Sprintf("--threads=%d", threads),
+		fmt.Sprintf("--rows=%d", rows),
+		fmt.Sprintf("--consistency=%s", consistency),
+		fmt.Sprintf("-F=%s", fileSize),
 	)
 
 	return exec.Command(dumplingPath, args...)
@@ -315,6 +322,26 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func getNonEmptyEnv(key, defaultValue string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+func getPositiveIntEnv(key string, defaultValue int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return defaultValue
+	}
+	return parsed
 }
 
 // ValidateSQL 验证SQL语句安全性
