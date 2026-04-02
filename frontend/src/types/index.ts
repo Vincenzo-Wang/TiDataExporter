@@ -128,6 +128,17 @@ export interface DailyStatistics {
   total_size: number;
 }
 
+export interface TenantStatistics {
+  tenant_id: number;
+  tenant_name: string;
+  task_count: number;
+  success_count: number;
+  failed_count: number;
+  total_size: number;
+  success_rate: number;
+  failure_rate: number;
+}
+
 export interface ApiResponse<T = unknown> {
   code: number;
   message: string;

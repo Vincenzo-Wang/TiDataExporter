@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -133,6 +134,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 		// 统计信息
 		adminAuthGroup.GET("/statistics/overview", r.getStatisticsOverview)
 		adminAuthGroup.GET("/statistics/daily", r.getDailyStatistics)
+		adminAuthGroup.GET("/statistics/tenants", r.getTenantStatistics)
 	}
 }
 
@@ -1476,48 +1478,50 @@ func jsonMarshal(v interface{}) ([]byte, error) {
 
 // getStatisticsOverview 获取统计概览
 func (r *Router) getStatisticsOverview(c *gin.Context) {
+	startTime, endTime, err := parseStatisticsRange(c)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+
+	query := r.buildStatisticsBaseQuery(c, startTime, endTime)
+
 	// 统计各状态任务数量
 	type StatusCount struct {
 		Status string
 		Count  int64
 	}
 	var statusCounts []StatusCount
-	r.db.Model(&models.ExportTask{}).
-		Select("status, COUNT(*) as count").
+	query.Select("status, COUNT(*) as count").
 		Group("status").
 		Scan(&statusCounts)
 
-	// 转换为map
 	statusMap := make(map[string]int64)
 	for _, sc := range statusCounts {
 		statusMap[sc.Status] = sc.Count
 	}
 
-	// 计算总数和各状态数
 	var totalTasks int64
-	r.db.Model(&models.ExportTask{}).Count(&totalTasks)
+	query.Count(&totalTasks)
 
-	// 统计总行数和总大小
 	type SumResult struct {
 		TotalRows int64
 		TotalSize int64
 	}
 	var sumResult SumResult
-	r.db.Model(&models.ExportTask{}).
+	r.buildStatisticsBaseQuery(c, startTime, endTime).
 		Select("COALESCE(SUM(row_count), 0) as total_rows, COALESCE(SUM(file_size), 0) as total_size").
 		Where("status = ?", models.TaskStatusSuccess).
 		Scan(&sumResult)
 
-	// 计算平均执行时间（秒）
 	type AvgDuration struct {
 		AvgSeconds float64
 	}
 	var avgDuration AvgDuration
-	r.db.Raw(`
-		SELECT COALESCE(AVG(TIMESTAMPDIFF(SECOND, started_at, completed_at)), 0) as avg_seconds
-		FROM export_tasks
-		WHERE status = 'success' AND started_at IS NOT NULL AND completed_at IS NOT NULL
-	`).Scan(&avgDuration)
+	r.buildStatisticsBaseQuery(c, startTime, endTime).
+		Select("COALESCE(AVG(TIMESTAMPDIFF(SECOND, started_at, completed_at)), 0) as avg_seconds").
+		Where("status = ? AND started_at IS NOT NULL AND completed_at IS NOT NULL", models.TaskStatusSuccess).
+		Scan(&avgDuration)
 
 	c.JSON(200, gin.H{
 		"code": 0,
@@ -1537,49 +1541,193 @@ func (r *Router) getStatisticsOverview(c *gin.Context) {
 
 // getDailyStatistics 获取每日统计数据
 func (r *Router) getDailyStatistics(c *gin.Context) {
-	startDate := c.Query("start_date")
-	endDate := c.Query("end_date")
-
-	// 默认最近30天
-	if startDate == "" {
-		startDate = time.Now().AddDate(0, 0, -30).Format("2006-01-02")
-	}
-	if endDate == "" {
-		endDate = time.Now().Format("2006-01-02")
+	startTime, endTime, err := parseStatisticsRange(c)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
 	}
 
-	// 查询每日统计数据
 	type DailyStat struct {
-		Date         string
-		TaskCount    int64
-		SuccessCount int64
-		FailedCount  int64
-		TotalRows    int64
-		TotalSize    int64
+		Date         string `json:"date"`
+		TaskCount    int64  `json:"task_count"`
+		SuccessCount int64  `json:"success_count"`
+		FailedCount  int64  `json:"failed_count"`
+		TotalRows    int64  `json:"total_rows"`
+		TotalSize    int64  `json:"total_size"`
 	}
-	var dailyStats []DailyStat
+	var rows []DailyStat
 
-	r.db.Raw(`
-		SELECT
+	r.buildStatisticsBaseQuery(c, startTime, endTime).
+		Select(`
 			DATE(created_at) as date,
 			COUNT(*) as task_count,
 			SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
 			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
 			COALESCE(SUM(row_count), 0) as total_rows,
 			COALESCE(SUM(file_size), 0) as total_size
-		FROM export_tasks
-		WHERE DATE(created_at) >= ? AND DATE(created_at) <= ?
-		GROUP BY DATE(created_at)
-		ORDER BY date ASC
-	`, startDate, endDate).Scan(&dailyStats)
+		`).
+		Group("DATE(created_at)").
+		Order("date ASC").
+		Scan(&rows)
 
-	// 如果没有数据，返回空数组
-	if dailyStats == nil {
-		dailyStats = []DailyStat{}
+	rowMap := make(map[string]DailyStat, len(rows))
+	for _, item := range rows {
+		rowMap[item.Date] = item
+	}
+
+	dailyStats := make([]DailyStat, 0)
+	for d := startTime; !d.After(endTime); d = d.AddDate(0, 0, 1) {
+		dateKey := d.Format("2006-01-02")
+		if item, ok := rowMap[dateKey]; ok {
+			dailyStats = append(dailyStats, item)
+			continue
+		}
+		dailyStats = append(dailyStats, DailyStat{Date: dateKey})
 	}
 
 	c.JSON(200, gin.H{
 		"code": 0,
 		"data": dailyStats,
 	})
+}
+
+// getTenantStatistics 获取租户维度统计
+func (r *Router) getTenantStatistics(c *gin.Context) {
+	startTime, endTime, err := parseStatisticsRange(c)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+
+	sortExpr, limit, err := parseTenantStatisticsOptions(c)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+
+	type TenantStat struct {
+		TenantID     int64   `json:"tenant_id"`
+		TenantName   string  `json:"tenant_name"`
+		TaskCount    int64   `json:"task_count"`
+		SuccessCount int64   `json:"success_count"`
+		FailedCount  int64   `json:"failed_count"`
+		TotalSize    int64   `json:"total_size"`
+		SuccessRate  float64 `json:"success_rate"`
+		FailureRate  float64 `json:"failure_rate"`
+	}
+
+	query := r.db.Table("export_tasks t").
+		Where("t.created_at >= ? AND t.created_at < ?", startTime, endTime.AddDate(0, 0, 1))
+
+	tenantID := c.Query("tenant_id")
+	if tenantID != "" {
+		query = query.Where("t.tenant_id = ?", tenantID)
+	}
+
+	var tenantStats []TenantStat
+	query = query.Joins("LEFT JOIN tenants tn ON tn.id = t.tenant_id").
+		Select(`
+			t.tenant_id as tenant_id,
+			COALESCE(tn.name, CONCAT('租户-', t.tenant_id)) as tenant_name,
+			COUNT(*) as task_count,
+			SUM(CASE WHEN t.status = 'success' THEN 1 ELSE 0 END) as success_count,
+			SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+			COALESCE(SUM(t.file_size), 0) as total_size,
+			CASE WHEN COUNT(*) = 0 THEN 0 ELSE ROUND(SUM(CASE WHEN t.status = 'success' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) END as success_rate,
+			CASE WHEN COUNT(*) = 0 THEN 0 ELSE ROUND(SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) END as failure_rate
+		`).
+		Group("t.tenant_id, tn.name").
+		Order(sortExpr)
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	query.Scan(&tenantStats)
+
+	if tenantStats == nil {
+		tenantStats = []TenantStat{}
+	}
+
+	c.JSON(200, gin.H{
+		"code": 0,
+		"data": tenantStats,
+	})
+}
+
+func (r *Router) buildStatisticsBaseQuery(c *gin.Context, startTime, endTime time.Time) *gorm.DB {
+	query := r.db.Model(&models.ExportTask{}).
+		Where("created_at >= ? AND created_at < ?", startTime, endTime.AddDate(0, 0, 1))
+
+	tenantID := c.Query("tenant_id")
+	if tenantID != "" {
+		query = query.Where("tenant_id = ?", tenantID)
+	}
+
+	return query
+}
+
+func parseTenantStatisticsOptions(c *gin.Context) (string, int, error) {
+	sortBy := c.DefaultQuery("sort_by", "task_count")
+	order := c.DefaultQuery("order", "desc")
+
+	sortFieldMap := map[string]string{
+		"task_count":   "task_count",
+		"success_count": "success_count",
+		"failed_count": "failed_count",
+		"success_rate": "success_rate",
+		"failure_rate": "failure_rate",
+		"total_size":   "total_size",
+	}
+	field, ok := sortFieldMap[sortBy]
+	if !ok {
+		return "", 0, fmt.Errorf("sort_by 参数不支持")
+	}
+
+	orderUpper := "DESC"
+	if order == "asc" {
+		orderUpper = "ASC"
+	} else if order != "desc" {
+		return "", 0, fmt.Errorf("order 参数仅支持 asc/desc")
+	}
+
+	limit := 0
+	if limitStr := c.Query("limit"); limitStr != "" {
+		parsed, err := strconv.Atoi(limitStr)
+		if err != nil || parsed < 1 {
+			return "", 0, fmt.Errorf("limit 参数必须是正整数")
+		}
+		if parsed > 200 {
+			parsed = 200
+		}
+		limit = parsed
+	}
+
+	return field + " " + orderUpper, limit, nil
+}
+
+func parseStatisticsRange(c *gin.Context) (time.Time, time.Time, error) {
+	const dateLayout = "2006-01-02"
+
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
+
+	if startDate == "" {
+		startDate = time.Now().AddDate(0, 0, -30).Format(dateLayout)
+	}
+	if endDate == "" {
+		endDate = time.Now().Format(dateLayout)
+	}
+
+	startTime, err := time.ParseInLocation(dateLayout, startDate, time.Local)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("start_date 格式错误，应为 YYYY-MM-DD")
+	}
+	endTime, err := time.ParseInLocation(dateLayout, endDate, time.Local)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("end_date 格式错误，应为 YYYY-MM-DD")
+	}
+	if endTime.Before(startTime) {
+		return time.Time{}, time.Time{}, fmt.Errorf("end_date 不能早于 start_date")
+	}
+
+	return startTime, endTime, nil
 }
