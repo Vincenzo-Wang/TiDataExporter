@@ -1,6 +1,6 @@
 -- =============================================
 -- Migration: 000001_init_schema.up.sql
--- Description: 初始化所有表结构（TiDB 兼容基线）
+-- Description: 初始化最新完整表结构并插入默认管理员（TiDB 兼容基线）
 -- =============================================
 
 CREATE TABLE IF NOT EXISTS admins (
@@ -170,3 +170,9 @@ CREATE TABLE IF NOT EXISTS dumpling_templates (
     INDEX idx_tenant_id (tenant_id),
     INDEX idx_deleted_at (deleted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */ COMMENT='Dumpling 参数模板表';
+
+INSERT INTO admins (username, password_hash, email, role, status)
+SELECT 'admin', '$2y$10$WdQsrT8PpgRYm1Q6zlzZTOtbu8LwcpTKMThRdyiWC5t6uk9oZ5zjC', 'admin@example.com', 'admin', 1
+WHERE NOT EXISTS (
+    SELECT 1 FROM admins WHERE username = 'admin'
+);

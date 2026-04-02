@@ -255,9 +255,9 @@ docker compose --env-file .env.test -f docker-compose.test.yml logs -f backend w
 #### TiDB 初始化与升级策略
 
 - 所有初始化与升级 SQL 统一位于 `backend/migrations/up/*.sql`
-- `000001_init_schema.up.sql` 已更新为 TiDB 兼容基线
-- `000005_seed_default_admin.up.sql` 会幂等插入默认管理员 `admin / admin123`
+- `000001_init_schema.up.sql` 现在就是最新完整基线，已包含 TiDB 兼容表结构与默认管理员 `admin / admin123`
 - `migrate` 服务会调用 `backend/main.go` 中的迁移入口执行 SQL 文件
+- 若你清理过历史迁移文件，请对新环境重新初始化数据库，不要复用旧的 `schema_migrations` 记录
 
 ### 方式三：本地 Docker 手动部署
 
@@ -621,8 +621,8 @@ docker exec claw-mysql mysql -uroot -proot123 claw_export -e \
 # 方式一：使用部署脚本
 ./deploy.sh migrate
 
-# 方式二：手动执行 SQL
-docker exec -i claw-mysql mysql -uroot -proot123 claw_export < backend/migrations/up/000003_add_missing_columns.up.sql
+# 方式二：手动执行完整初始化 SQL（适合新库）
+docker exec -i claw-mysql mysql -uroot -proot123 claw_export < backend/migrations/up/000001_init_schema.up.sql
 ```
 
 #### 7. Go 版本不兼容
@@ -730,18 +730,11 @@ curl http://localhost:8080/health
 
 ```
 backend/migrations/
-├── init.sh                              # Docker 首次启动时按顺序执行 up/*.sql
+├── init.sh                          # Docker 首次启动时按顺序执行 up/*.sql
 ├── up/
-│   ├── 000001_init_schema.up.sql        # TiDB 兼容基线表结构
-│   ├── 000002_drop_foreign_keys.up.sql  # 历史兼容修复
-│   ├── 000003_add_missing_columns.up.sql  # 幂等补字段
-│   ├── 000004_add_s3_provider.up.sql    # 幂等补 provider 字段
-│   └── 000005_seed_default_admin.up.sql # 幂等初始化默认管理员
+│   └── 000001_init_schema.up.sql    # 最新完整基线：表结构 + 默认管理员
 └── down/
-    ├── 000001_init_schema.down.sql      # 回滚脚本
-    ├── 000002_drop_foreign_keys.down.sql
-    ├── 000003_add_missing_columns.down.sql
-    └── 000004_add_s3_provider.down.sql
+    └── 000001_init_schema.down.sql  # 回滚脚本
 ```
 
 #### 手动执行迁移
@@ -895,8 +888,8 @@ git pull origin main
 # 使用部署脚本
 ./deploy.sh migrate
 
-# 或手动执行
-docker exec -i claw-mysql mysql -uroot -p${MYSQL_ROOT_PASSWORD} claw_export < backend/migrations/up/000004_add_s3_provider.up.sql
+# 或手动执行完整初始化 SQL
+docker exec -i claw-mysql mysql -uroot -p${MYSQL_ROOT_PASSWORD} claw_export < backend/migrations/up/000001_init_schema.up.sql
 ```
 
 ### 3. 重新构建并部署
