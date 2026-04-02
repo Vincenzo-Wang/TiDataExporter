@@ -173,9 +173,15 @@ func (w *Worker) handleTask(ctx context.Context, msg *queue.TaskMessage) error {
 	completedAt := time.Now()
 	expiresAt := completedAt.Add(time.Duration(task.RetentionHours) * time.Hour)
 
+	fileURLsJSON, err := json.Marshal(result.Files)
+	if err != nil {
+		return fmt.Errorf("failed to marshal task files: %w", err)
+	}
+
 	if err := w.db.WithContext(ctx).Model(&task).Updates(map[string]interface{}{
 		"status":       models.TaskStatusSuccess,
 		"file_url":     result.FileURL,
+		"file_urls":    string(fileURLsJSON),
 		"file_size":    result.FileSize,
 		"completed_at": completedAt,
 		"expires_at":   expiresAt,

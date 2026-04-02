@@ -57,6 +57,14 @@ export interface S3Config {
 
 export type TaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'canceled' | 'expired';
 
+export interface ExportTaskFile {
+  index?: number;
+  name: string;
+  path: string;
+  url: string;
+  size: number;
+}
+
 export interface ExportTask {
   id: number;
   task_id: number;
@@ -71,6 +79,8 @@ export interface ExportTask {
   filetype: string;
   compress: string;
   file_url: string;
+  files?: ExportTaskFile[];
+  file_count?: number;
   file_size: number;
   row_count: number;
   status: TaskStatus;

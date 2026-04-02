@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, Descriptions, Tag, Progress, Button, Space, Modal, Typography, message } from 'antd';
-import { ArrowLeftOutlined, StopOutlined, RedoOutlined, CopyOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, StopOutlined, RedoOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '@/services/api';
 import type { ApiResponse, ExportTask, TaskStatus } from '@/types';
@@ -78,11 +78,9 @@ export default function TaskDetail() {
     }
   };
 
-  const copyFileUrl = () => {
-    if (task?.file_url) {
-      navigator.clipboard.writeText(task.file_url);
-      message.success('已复制到剪贴板');
-    }
+  const copyFileUrl = async (url: string) => {
+    await navigator.clipboard.writeText(url);
+    message.success('已复制到剪贴板');
   };
 
   const formatSize = (size: number) => {
@@ -98,6 +96,11 @@ export default function TaskDetail() {
   }
 
   const statusInfo = taskStatusMap[task.status] || { color: 'default', text: task.status };
+  const fileList = task.files && task.files.length > 0
+    ? task.files
+    : (task.file_url
+      ? [{ name: 'output', path: task.file_url, url: task.file_url, size: task.file_size }]
+      : []);
 
   return (
     <div>
@@ -150,14 +153,25 @@ export default function TaskDetail() {
             {task.expires_at ? new Date(task.expires_at).toLocaleString('zh-CN') : '-'}
           </Descriptions.Item>
           <Descriptions.Item label="文件地址" span={2}>
-            <Space>
-              <Text copyable={{ text: task.file_url }}>{task.file_url || '-'}</Text>
-              {task.file_url && (
-                <Button type="link" size="small" icon={<CopyOutlined />} onClick={copyFileUrl}>
-                  复制
-                </Button>
-              )}
-            </Space>
+            {fileList.length === 0 ? (
+              <Text>-</Text>
+            ) : (
+              <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                {fileList.map((file, index) => (
+                  <Space key={`${file.path}-${index}`} wrap>
+                    <Text strong>{file.name || `文件 ${index + 1}`}</Text>
+                    <Text type="secondary">({formatSize(file.size || 0)})</Text>
+                    <Text copyable={{ text: file.url }}>{file.url}</Text>
+                    <Button type="link" size="small" icon={<DownloadOutlined />} href={file.url} target="_blank">
+                      下载
+                    </Button>
+                    <Button type="link" size="small" onClick={() => copyFileUrl(file.url)}>
+                      复制
+                    </Button>
+                  </Space>
+                ))}
+              </Space>
+            )}
           </Descriptions.Item>
           <Descriptions.Item label="SQL 语句" span={2}>
             <Paragraph

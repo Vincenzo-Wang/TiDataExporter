@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -69,12 +70,6 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 	}
 	defer os.RemoveAll(taskDir) // 清理临时目录
 
-	// 构建S3 key
-	s3Key := fmt.Sprintf("exports/%d/output.%s", taskID, filetype)
-	if compress != "" {
-		s3Key += "." + compress
-	}
-
 	// 构建Dumpling命令 - output 是目录，不是文件
 	cmd := e.buildDumplingCommand(tidbConfig, password, sqlText, filetype, compress, taskDir)
 
@@ -131,63 +126,65 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 		return nil, fmt.Errorf("no output files found in %s", taskDir)
 	}
 
-	// 如果只有一个文件，直接使用
-	// 如果有多个文件，目前只使用第一个（后续可以考虑打包）
-	outputFile := files[0]
-	e.logger.Info("found output file",
+	sort.Strings(files)
+	e.logger.Info("found output files",
 		zap.Int64("task_id", taskID),
-		zap.String("file", outputFile),
 		zap.Int("total_files", len(files)),
 	)
 
-	// 获取输出文件信息
-	fileInfo, err := os.Stat(outputFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat output file: %w", err)
+	contentType := "application/octet-stream"
+	if filetype == "csv" {
+		contentType = "text/csv"
 	}
-	fileSize := fileInfo.Size()
 
-	// 上传到S3
-	if s3Client != nil {
-		file, err := os.Open(outputFile)
+	var totalFileSize int64
+	resultFiles := make([]ExecutionFile, 0, len(files))
+
+	for i, outputFile := range files {
+		fileInfo, err := os.Stat(outputFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open output file: %w", err)
+			return nil, fmt.Errorf("failed to stat output file %s: %w", outputFile, err)
 		}
-		defer file.Close()
+		fileSize := fileInfo.Size()
+		totalFileSize += fileSize
 
-		contentType := "application/octet-stream"
-		if filetype == "csv" {
-			contentType = "text/csv"
+		ext := buildOutputFileExt(outputFile, filetype, compress)
+		s3Key := fmt.Sprintf("exports/%d/output%s", taskID, ext)
+		if len(files) > 1 {
+			s3Key = fmt.Sprintf("exports/%d/output_%06d%s", taskID, i+1, ext)
 		}
 
-		// 使用简化的 S3 key（避免 OSS 对特殊文件名的限制）
-		// dumpling 生成的文件名如 result.000000000.csv.gz 可能触发 InvalidObjectName 错误
-		ext := filepath.Ext(outputFile)
-		if compress != "" && !strings.HasSuffix(ext, "."+compress) {
-			// 如果文件是压缩的，确保扩展名正确
-			ext = "." + filetype + "." + compress
-		} else if ext == "" {
-			ext = "." + filetype
-			if compress != "" {
-				ext += "." + compress
+		if s3Client != nil {
+			file, err := os.Open(outputFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to open output file %s: %w", outputFile, err)
 			}
+
+			if err := s3Client.Upload(ctx, s3Key, file, fileSize, contentType); err != nil {
+				file.Close()
+				return nil, fmt.Errorf("failed to upload %s to s3: %w", outputFile, err)
+			}
+			file.Close()
 		}
-		actualS3Key := fmt.Sprintf("exports/%d/output%s", taskID, ext)
-		if err := s3Client.Upload(ctx, actualS3Key, file, fileSize, contentType); err != nil {
-			return nil, fmt.Errorf("failed to upload to s3: %w", err)
-		}
-		s3Key = actualS3Key
+
+		resultFiles = append(resultFiles, ExecutionFile{
+			Path: s3Key,
+			Name: filepath.Base(outputFile),
+			Size: fileSize,
+		})
 	}
 
 	e.logger.Info("export completed",
 		zap.Int64("task_id", taskID),
-		zap.Int64("file_size", fileSize),
+		zap.Int64("file_size", totalFileSize),
+		zap.Int("file_count", len(resultFiles)),
 		zap.Duration("duration", duration),
 	)
 
 	return &ExecutionResult{
-		FileURL:  s3Key,
-		FileSize: fileSize,
+		FileURL:  resultFiles[0].Path,
+		FileSize: totalFileSize,
+		Files:    resultFiles,
 		Duration: duration,
 	}, nil
 }
@@ -196,7 +193,38 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 type ExecutionResult struct {
 	FileURL  string
 	FileSize int64
+	Files    []ExecutionFile
 	Duration time.Duration
+}
+
+// ExecutionFile 导出结果文件
+// Path 为对象存储中的 key，Name 为原始文件名，Size 为文件大小（字节）
+type ExecutionFile struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+func buildOutputFileExt(outputFile, filetype, compress string) string {
+	baseName := filepath.Base(outputFile)
+	if compress != "" && strings.HasSuffix(baseName, "."+compress) {
+		nameWithoutCompress := strings.TrimSuffix(baseName, "."+compress)
+		nameExt := filepath.Ext(nameWithoutCompress)
+		if nameExt != "" {
+			return nameExt + "." + compress
+		}
+		return "." + filetype + "." + compress
+	}
+
+	ext := filepath.Ext(baseName)
+	if ext != "" {
+		return ext
+	}
+
+	if compress != "" {
+		return "." + filetype + "." + compress
+	}
+	return "." + filetype
 }
 
 func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password, sqlText, filetype, compress, outputDir string) *exec.Cmd {
@@ -230,9 +258,10 @@ func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password,
 
 	args = append(args, e.buildDumplingTLSArgs(tidbConfig)...)
 	args = append(args,
-		"--threads=4",
-		"--rows=100000",
+		"--threads=8",
+		"--rows=200000",
 		"--consistency=auto",
+		"-F=100M",
 	)
 
 	return exec.Command(dumplingPath, args...)

@@ -2,7 +2,7 @@
 
 > 版本: v1.0.0  
 > 基础地址: `http://your-domain:8080`  
-> 最后更新: 2026-03-23
+> 最后更新: 2026-04-02
 
 ---
 
@@ -211,7 +211,24 @@ X-API-Secret: your-api-secret
     "task_id": 123456789,
     "task_name": "用户数据导出",
     "status": "success",
-    "file_url": "https://s3.amazonaws.com/bucket/path/to/file.sql.gz",
+    "file_url": "https://signed-url-for-first-file",
+    "files": [
+      {
+        "index": 0,
+        "name": "result.000000000.sql.gz",
+        "path": "exports/123456789/output_000001.sql.gz",
+        "url": "https://signed-url-1",
+        "size": 524288
+      },
+      {
+        "index": 1,
+        "name": "result.000000001.sql.gz",
+        "path": "exports/123456789/output_000002.sql.gz",
+        "url": "https://signed-url-2",
+        "size": 524288
+      }
+    ],
+    "file_count": 2,
     "file_size": 1048576,
     "row_count": 10000,
     "started_at": "2026-03-23T10:01:00Z",
@@ -297,7 +314,24 @@ Content-Type: application/json
     {
       "task_id": 123456789,
       "status": "success",
-      "file_url": "https://..."
+      "file_url": "https://signed-url-for-first-file",
+      "files": [
+        {
+          "index": 0,
+          "name": "part-000.sql.gz",
+          "path": "exports/123456789/output_000001.sql.gz",
+          "url": "https://signed-url-1",
+          "size": 524288
+        },
+        {
+          "index": 1,
+          "name": "part-001.sql.gz",
+          "path": "exports/123456789/output_000002.sql.gz",
+          "url": "https://signed-url-2",
+          "size": 524288
+        }
+      ],
+      "file_count": 2
     },
     {
       "task_id": 123456790,
@@ -328,7 +362,38 @@ X-API-Secret: your-api-secret
 
 **响应**
 
-返回 HTTP 302 重定向到 S3 文件地址。
+- 单文件：返回 HTTP 302，重定向到文件的预签名下载地址（兼容旧行为）
+- 多文件：返回 JSON 清单（`code=0`），包含 `files` 数组（每项含 `index/name/path/url/size`）
+
+多文件返回示例：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "task_id": 123456789,
+    "status": "success",
+    "file_count": 2,
+    "files": [
+      {
+        "index": 0,
+        "name": "part-000.sql.gz",
+        "path": "exports/123456789/output_000001.sql.gz",
+        "url": "https://signed-url-1",
+        "size": 524288
+      },
+      {
+        "index": 1,
+        "name": "part-001.sql.gz",
+        "path": "exports/123456789/output_000002.sql.gz",
+        "url": "https://signed-url-2",
+        "size": 524288
+      }
+    ]
+  }
+}
+```
 
 **错误情况**
 
@@ -960,4 +1025,4 @@ Authorization: Bearer <token>
 
 ---
 
-*最后更新: 2026-03-23*
+*最后更新: 2026-04-02*

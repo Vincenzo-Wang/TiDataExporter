@@ -28,6 +28,7 @@ type ExportTask struct {
 	Priority        int        `gorm:"default:5;index:idx_priority" json:"priority"`
 	Status          string     `gorm:"type:varchar(20);default:pending;index:idx_tenant_status" json:"status"`
 	FileURL         string     `gorm:"type:varchar(500);column:file_url" json:"file_url"`
+	FileURLs        string     `gorm:"type:json;column:file_urls" json:"file_urls"`
 	FileSize        int64      `gorm:"column:file_size" json:"file_size"`
 	RowCount        int64      `gorm:"column:row_count" json:"row_count"`
 	ErrorMessage    string     `gorm:"type:text;column:error_message" json:"error_message"`

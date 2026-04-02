@@ -1,7 +1,10 @@
 package v1
 
 import (
+	"encoding/json"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"claw-export-platform/api/middleware"
@@ -160,54 +163,19 @@ func (h *ExportHandler) GetTask(c *gin.Context) {
 		return
 	}
 
-	// 生成完整的 file_url（预签名URL）
-	var fileURL string
-	if task.FileURL != "" && task.Status == models.TaskStatusSuccess {
-		// 获取S3配置
-		var s3Config models.S3Config
-		if err := h.db.First(&s3Config, task.S3ConfigID).Error; err == nil {
-			// 解密SecretKey
-			if secretKey, err := h.encryptor.Decrypt(s3Config.SecretKeyEncrypted); err == nil {
-				// 创建S3客户端
-				if s3Client, err := s3.NewStorageClient(c.Request.Context(), s3.Config{
-					Provider:   string(s3Config.Provider),
-					Endpoint:   s3Config.Endpoint,
-					AccessKey:  s3Config.AccessKey,
-					SecretKey:  secretKey,
-					Bucket:     s3Config.Bucket,
-					Region:     s3Config.Region,
-					PathPrefix: s3Config.PathPrefix,
-				}); err == nil {
-					// 计算预签名URL有效期（使用文件的剩余有效期，至少1小时）
-					expiresIn := time.Hour
-					if task.ExpiresAt != nil {
-						remaining := time.Until(*task.ExpiresAt)
-						if remaining > time.Hour {
-							expiresIn = remaining
-						} else if remaining > 0 {
-							expiresIn = remaining
-						}
-					}
-					// 生成预签名URL
-					if presignedURL, err := s3Client.GetPresignedURL(c.Request.Context(), task.FileURL, expiresIn); err == nil {
-						fileURL = presignedURL
-					}
-				}
-			}
-		}
-		// 如果生成失败，使用原始路径（向后兼容）
-		if fileURL == "" {
-			fileURL = task.FileURL
-		}
-	} else if task.FileURL != "" {
-		fileURL = task.FileURL
+	var s3Client s3.StorageClient
+	if task.Status == models.TaskStatusSuccess {
+		s3Client = h.buildTaskS3Client(c, task.S3ConfigID)
 	}
 
+	files, fileURL := h.buildTaskFilesResponse(c, task, s3Client)
 	data := gin.H{
 		"task_id":       task.ID,
 		"task_name":     task.TaskName,
 		"status":        task.Status,
 		"file_url":      fileURL,
+		"files":         files,
+		"file_count":    len(files),
 		"file_size":     task.FileSize,
 		"row_count":     task.RowCount,
 		"error_message": task.ErrorMessage,
@@ -278,25 +246,16 @@ func (h *ExportHandler) BatchQuery(c *gin.Context) {
 	var tasks []models.ExportTask
 	h.db.Where("id IN ? AND tenant_id = ?", req.TaskIDs, tenantID).Find(&tasks)
 
-	// 收集所有需要的 S3 配置 ID
-	s3ConfigIDs := make(map[int64]bool)
+	s3Clients := make(map[int64]s3.StorageClient)
 	for _, task := range tasks {
-		if task.S3ConfigID > 0 && task.FileURL != "" && task.Status == models.TaskStatusSuccess {
-			s3ConfigIDs[task.S3ConfigID] = true
+		if task.Status != models.TaskStatusSuccess || task.S3ConfigID <= 0 {
+			continue
 		}
-	}
-
-	// 批量获取 S3 配置
-	s3Configs := make(map[int64]models.S3Config)
-	if len(s3ConfigIDs) > 0 {
-		var configs []models.S3Config
-		ids := make([]int64, 0, len(s3ConfigIDs))
-		for id := range s3ConfigIDs {
-			ids = append(ids, id)
+		if _, ok := s3Clients[task.S3ConfigID]; ok {
+			continue
 		}
-		h.db.Where("id IN ?", ids).Find(&configs)
-		for _, cfg := range configs {
-			s3Configs[cfg.ID] = cfg
+		if client := h.buildTaskS3Client(c, task.S3ConfigID); client != nil {
+			s3Clients[task.S3ConfigID] = client
 		}
 	}
 
@@ -307,46 +266,14 @@ func (h *ExportHandler) BatchQuery(c *gin.Context) {
 			"status":  task.Status,
 		}
 
-		// 生成完整的 file_url（预签名URL）
-		if task.FileURL != "" && task.Status == models.TaskStatusSuccess {
-			if s3Config, ok := s3Configs[task.S3ConfigID]; ok {
-				if secretKey, err := h.encryptor.Decrypt(s3Config.SecretKeyEncrypted); err == nil {
-					if s3Client, err := s3.NewStorageClient(c.Request.Context(), s3.Config{
-						Provider:   string(s3Config.Provider),
-						Endpoint:   s3Config.Endpoint,
-						AccessKey:  s3Config.AccessKey,
-						SecretKey:  secretKey,
-						Bucket:     s3Config.Bucket,
-						Region:     s3Config.Region,
-						PathPrefix: s3Config.PathPrefix,
-					}); err == nil {
-						expiresIn := time.Hour
-						if task.ExpiresAt != nil {
-							remaining := time.Until(*task.ExpiresAt)
-							if remaining > time.Hour {
-								expiresIn = remaining
-							} else if remaining > 0 {
-								expiresIn = remaining
-							}
-						}
-						if presignedURL, err := s3Client.GetPresignedURL(c.Request.Context(), task.FileURL, expiresIn); err == nil {
-							result["file_url"] = presignedURL
-						} else {
-							result["file_url"] = task.FileURL
-						}
-					} else {
-						result["file_url"] = task.FileURL
-					}
-				} else {
-					result["file_url"] = task.FileURL
-				}
-			} else {
-				result["file_url"] = task.FileURL
-			}
-		} else if task.FileURL != "" {
-			result["file_url"] = task.FileURL
+		files, fileURL := h.buildTaskFilesResponse(c, task, s3Clients[task.S3ConfigID])
+		if fileURL != "" {
+			result["file_url"] = fileURL
 		}
-
+		if len(files) > 0 {
+			result["files"] = files
+			result["file_count"] = len(files)
+		}
 		if task.ErrorMessage != "" {
 			result["error_message"] = task.ErrorMessage
 		}
@@ -356,7 +283,7 @@ func (h *ExportHandler) BatchQuery(c *gin.Context) {
 	utils.Success(c, results)
 }
 
-// GetFile 文件下载代理（使用预签名URL）
+// GetFile 文件下载代理（单文件重定向；多文件返回清单）
 func (h *ExportHandler) GetFile(c *gin.Context) {
 	tenantID := c.GetInt64(string(middleware.ContextKeyTenantID))
 	taskID := c.Param("task_id")
@@ -367,7 +294,8 @@ func (h *ExportHandler) GetFile(c *gin.Context) {
 		return
 	}
 
-	if task.FileURL == "" {
+	files := parseTaskFiles(task)
+	if len(files) == 0 {
 		utils.NotFound(c, "文件不存在")
 		return
 	}
@@ -378,23 +306,106 @@ func (h *ExportHandler) GetFile(c *gin.Context) {
 		return
 	}
 
-	// 获取S3配置
-	var s3Config models.S3Config
-	if err := h.db.First(&s3Config, task.S3ConfigID).Error; err != nil {
-		h.logger.Error("failed to get s3 config", zap.Error(err))
-		utils.InternalError(c, "获取S3配置失败")
+	s3Client := h.buildTaskS3Client(c, task.S3ConfigID)
+	if s3Client == nil {
+		utils.InternalError(c, "创建S3客户端失败")
 		return
 	}
 
-	// 解密SecretKey
+	expiresIn := calcPresignedExpire(task)
+
+	if len(files) == 1 {
+		presignedURL, err := s3Client.GetPresignedURL(c.Request.Context(), files[0].Path, expiresIn)
+		if err != nil {
+			h.logger.Error("failed to generate presigned url", zap.Error(err))
+			utils.InternalError(c, "生成下载链接失败")
+			return
+		}
+		c.Redirect(http.StatusFound, presignedURL)
+		return
+	}
+
+	respFiles := make([]gin.H, 0, len(files))
+	for i, file := range files {
+		url := file.Path
+		if presignedURL, err := s3Client.GetPresignedURL(c.Request.Context(), file.Path, expiresIn); err == nil {
+			url = presignedURL
+		}
+		respFiles = append(respFiles, gin.H{
+			"index": i,
+			"name":  fileNameOf(file),
+			"path":  file.Path,
+			"url":   url,
+			"size":  file.Size,
+		})
+	}
+
+	utils.Success(c, gin.H{
+		"task_id":    task.ID,
+		"status":     task.Status,
+		"file_count": len(respFiles),
+		"files":      respFiles,
+	})
+}
+
+type taskFile struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+func parseTaskFiles(task models.ExportTask) []taskFile {
+	if strings.TrimSpace(task.FileURLs) != "" {
+		var files []taskFile
+		if err := json.Unmarshal([]byte(task.FileURLs), &files); err == nil && len(files) > 0 {
+			return files
+		}
+	}
+	if strings.TrimSpace(task.FileURL) == "" {
+		return nil
+	}
+	return []taskFile{{
+		Path: task.FileURL,
+		Name: filepath.Base(task.FileURL),
+		Size: task.FileSize,
+	}}
+}
+
+func fileNameOf(file taskFile) string {
+	if strings.TrimSpace(file.Name) != "" {
+		return file.Name
+	}
+	return filepath.Base(file.Path)
+}
+
+func calcPresignedExpire(task models.ExportTask) time.Duration {
+	expiresIn := time.Hour
+	if task.ExpiresAt == nil {
+		return expiresIn
+	}
+	remaining := time.Until(*task.ExpiresAt)
+	if remaining > time.Hour {
+		return remaining
+	}
+	if remaining > 0 {
+		return remaining
+	}
+	return expiresIn
+}
+
+func (h *ExportHandler) buildTaskS3Client(c *gin.Context, s3ConfigID int64) s3.StorageClient {
+	var s3Config models.S3Config
+	if err := h.db.First(&s3Config, s3ConfigID).Error; err != nil {
+		h.logger.Warn("failed to get s3 config", zap.Int64("s3_config_id", s3ConfigID), zap.Error(err))
+		return nil
+	}
+
 	secretKey, err := h.encryptor.Decrypt(s3Config.SecretKeyEncrypted)
 	if err != nil {
-		h.logger.Error("failed to decrypt s3 secret key", zap.Error(err))
-		utils.InternalError(c, "解密S3密钥失败")
-		return
+		h.logger.Warn("failed to decrypt s3 secret key", zap.Int64("s3_config_id", s3ConfigID), zap.Error(err))
+		return nil
 	}
 
-	// 创建S3客户端
 	s3Client, err := s3.NewStorageClient(c.Request.Context(), s3.Config{
 		Provider:   string(s3Config.Provider),
 		Endpoint:   s3Config.Endpoint,
@@ -405,32 +416,43 @@ func (h *ExportHandler) GetFile(c *gin.Context) {
 		PathPrefix: s3Config.PathPrefix,
 	})
 	if err != nil {
-		h.logger.Error("failed to create s3 client", zap.Error(err))
-		utils.InternalError(c, "创建S3客户端失败")
-		return
+		h.logger.Warn("failed to create s3 client", zap.Int64("s3_config_id", s3ConfigID), zap.Error(err))
+		return nil
+	}
+	return s3Client
+}
+
+func (h *ExportHandler) buildTaskFilesResponse(c *gin.Context, task models.ExportTask, s3Client s3.StorageClient) ([]gin.H, string) {
+	taskFiles := parseTaskFiles(task)
+	if len(taskFiles) == 0 {
+		return nil, ""
 	}
 
-	// 计算预签名URL有效期（使用文件的剩余有效期，至少1小时）
-	expiresIn := time.Hour
-	if task.ExpiresAt != nil {
-		remaining := time.Until(*task.ExpiresAt)
-		if remaining > time.Hour {
-			expiresIn = remaining
-		} else if remaining > 0 {
-			expiresIn = remaining
+	expiresIn := calcPresignedExpire(task)
+	respFiles := make([]gin.H, 0, len(taskFiles))
+	primaryURL := ""
+
+	for i, file := range taskFiles {
+		url := file.Path
+		if s3Client != nil && task.Status == models.TaskStatusSuccess {
+			if presignedURL, err := s3Client.GetPresignedURL(c.Request.Context(), file.Path, expiresIn); err == nil {
+				url = presignedURL
+			}
 		}
+
+		if i == 0 {
+			primaryURL = url
+		}
+		respFiles = append(respFiles, gin.H{
+			"index": i,
+			"name":  fileNameOf(file),
+			"path":  file.Path,
+			"url":   url,
+			"size":  file.Size,
+		})
 	}
 
-	// 生成预签名URL
-	presignedURL, err := s3Client.GetPresignedURL(c.Request.Context(), task.FileURL, expiresIn)
-	if err != nil {
-		h.logger.Error("failed to generate presigned url", zap.Error(err))
-		utils.InternalError(c, "生成下载链接失败")
-		return
-	}
-
-	// 重定向到预签名URL
-	c.Redirect(http.StatusFound, presignedURL)
+	return respFiles, primaryURL
 }
 
 // AdminHandler 管理API处理器
