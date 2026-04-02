@@ -6,6 +6,7 @@ ENV_FILE="${ENV_FILE:-.env.test}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.test.yml}"
 BACKEND_HEALTH_PATH="${BACKEND_HEALTH_PATH:-/health}"
 FRONTEND_HEALTH_PATH="${FRONTEND_HEALTH_PATH:-/health}"
+FRONTEND_API_HEALTH_PATH="${FRONTEND_API_HEALTH_PATH:-/api/health}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -140,6 +141,13 @@ health_check() {
   else
     log_warn "frontend 健康检查失败，请查看日志"
   fi
+
+  log_info "健康检查 frontend -> backend 反代链路: http://127.0.0.1:${frontend_port}${FRONTEND_API_HEALTH_PATH}"
+  if curl -fsS "http://127.0.0.1:${frontend_port}${FRONTEND_API_HEALTH_PATH}" >/dev/null; then
+    log_ok "frontend -> backend 反代链路健康"
+  else
+    log_warn "frontend -> backend 反代链路检查失败，可能存在 upstream 解析或容器网络问题"
+  fi
 }
 
 show_logs() {
@@ -160,6 +168,7 @@ main() {
   case "$mode" in
     check)
       show_ps
+      health_check
       ;;
     frontend)
       deploy_services frontend
