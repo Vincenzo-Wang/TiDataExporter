@@ -129,6 +129,7 @@ func (h *ExportHandler) CreateTask(c *gin.Context) {
 		RetentionHours: req.RetentionHours,
 		Priority:       req.Priority,
 		Status:         models.TaskStatusPending,
+		FileURLs:       "[]",
 		MaxRetries:     3,
 	}
 

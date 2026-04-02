@@ -2,6 +2,8 @@ package models
 
 import (
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // 任务状态常量
@@ -48,6 +50,13 @@ type ExportTask struct {
 
 func (ExportTask) TableName() string {
 	return "export_tasks"
+}
+
+func (t *ExportTask) BeforeCreate(tx *gorm.DB) error {
+	if t.FileURLs == "" {
+		t.FileURLs = "[]"
+	}
+	return nil
 }
 
 // TaskLog 任务执行日志
