@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, Descriptions, Tag, Progress, Button, Space, Modal, Typography, message } from 'antd';
+import { Card, Descriptions, Tag, Progress, Button, Space, Modal, Typography, message, Table } from 'antd';
 import { ArrowLeftOutlined, StopOutlined, RedoOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '@/services/api';
@@ -108,7 +108,8 @@ export default function TaskDetail() {
       dataIndex: 'name',
       key: 'name',
       width: 260,
-      render: (name: string, record: ExportTaskFile, index: number) => name || `文件 ${index + 1}`,
+      render: (name: string, _: ExportTaskFile, index: number) => name || `文件 ${index + 1}`,
+
     },
     {
       title: '大小',
