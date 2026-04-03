@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,6 +86,7 @@ func (e *Executor) Execute(ctx context.Context, taskID, tenantID int64, bizName,
 	startTime := time.Now()
 	output, err := cmd.CombinedOutput()
 	duration := time.Since(startTime)
+	rowCount := parseDumplingRowCount(string(output))
 
 	// 记录 dumpling 输出（用于调试）
 	e.logger.Info("dumpling output",
@@ -186,6 +188,7 @@ func (e *Executor) Execute(ctx context.Context, taskID, tenantID int64, bizName,
 	return &ExecutionResult{
 		FileURL:  resultFiles[0].Path,
 		FileSize: totalFileSize,
+		RowCount: rowCount,
 		Files:    resultFiles,
 		Duration: duration,
 	}, nil
@@ -195,6 +198,7 @@ func (e *Executor) Execute(ctx context.Context, taskID, tenantID int64, bizName,
 type ExecutionResult struct {
 	FileURL  string
 	FileSize int64
+	RowCount int64
 	Files    []ExecutionFile
 	Duration time.Duration
 }
@@ -228,6 +232,38 @@ func buildOutputFileExt(outputFile, filetype, compress string) string {
 		return "." + filetype + "." + compress
 	}
 	return "." + filetype
+}
+
+func parseDumplingRowCount(output string) int64 {
+	if strings.TrimSpace(output) == "" {
+		return 0
+	}
+
+	patterns := []string{
+		`(?i)total\s+rows\s*[:=]\s*([0-9][0-9,]*)`,
+		`(?i)rows\s*[:=]\s*([0-9][0-9,]*)`,
+		`(?i)\(([0-9][0-9,]*)\s+rows\)`,
+	}
+
+	var maxRows int64
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(output, -1)
+		for _, m := range matches {
+			if len(m) < 2 {
+				continue
+			}
+			normalized := strings.ReplaceAll(m[1], ",", "")
+			rows, err := strconv.ParseInt(normalized, 10, 64)
+			if err != nil || rows < 0 {
+				continue
+			}
+			if rows > maxRows {
+				maxRows = rows
+			}
+		}
+	}
+	return maxRows
 }
 
 func resolveBizName(bizName, taskName string) string {

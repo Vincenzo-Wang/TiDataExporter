@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Card, Row, Col, DatePicker, Typography, Select, Table, message, Space } from 'antd';
+import { Card, Row, Col, DatePicker, Typography, Select, Table, message, Space, Empty } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Line, Pie, Column } from '@ant-design/charts';
 import dayjs from 'dayjs';
@@ -213,7 +213,7 @@ export default function Statistics() {
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
           <Card title="任务趋势" loading={loading}>
-            <Line {...taskTrendConfig} />
+            {dailyStats.length > 0 ? <Line {...taskTrendConfig} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />}
           </Card>
         </Col>
         <Col xs={24} lg={12}>
@@ -223,12 +223,12 @@ export default function Statistics() {
         </Col>
         <Col xs={24} lg={12}>
           <Card title="成功/失败对比" loading={loading}>
-            <Column {...successFailConfig} />
+            {taskData.length > 0 ? <Column {...successFailConfig} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />}
           </Card>
         </Col>
         <Col xs={24} lg={12}>
           <Card title="数据量趋势 (MB)" loading={loading}>
-            <Line {...dataSizeConfig} />
+            {dataSizeData.length > 0 ? <Line {...dataSizeConfig} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />}
           </Card>
         </Col>
         <Col span={24}>

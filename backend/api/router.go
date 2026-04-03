@@ -581,7 +581,7 @@ func (r *Router) listTasks(c *gin.Context) {
 	// 构建响应
 	items := make([]gin.H, len(tasks))
 	for i, task := range tasks {
-		files := buildAdminTaskFiles(task)
+		files := parseAdminTaskFiles(task)
 		item := gin.H{
 			"task_id":         task.ID,
 			"task_name":       task.TaskName,
@@ -684,7 +684,10 @@ func (r *Router) getTask(c *gin.Context) {
 		}
 	}
 
-	files := buildAdminTaskFiles(task)
+	files, primaryURL := r.buildAdminTaskFiles(c, task)
+	if primaryURL == "" {
+		primaryURL = task.FileURL
+	}
 	data := gin.H{
 		"task_id":          task.ID,
 		"task_name":        task.TaskName,
@@ -702,7 +705,7 @@ func (r *Router) getTask(c *gin.Context) {
 		"priority":         task.Priority,
 		"status":           task.Status,
 		"progress":         calculateProgress(task),
-		"file_url":         task.FileURL,
+		"file_url":         primaryURL,
 		"files":            files,
 		"file_count":       len(files),
 		"file_size":        task.FileSize,
@@ -1509,27 +1512,85 @@ func parseAdminTaskFiles(task models.ExportTask) []adminTaskFile {
 	}}
 }
 
-func buildAdminTaskFiles(task models.ExportTask) []gin.H {
-	taskFiles := parseAdminTaskFiles(task)
-	if len(taskFiles) == 0 {
+func calcAdminPresignedExpire(task models.ExportTask) time.Duration {
+	expiresIn := time.Hour
+	if task.ExpiresAt == nil {
+		return expiresIn
+	}
+	remaining := time.Until(*task.ExpiresAt)
+	if remaining > time.Hour {
+		return remaining
+	}
+	if remaining > 0 {
+		return remaining
+	}
+	return expiresIn
+}
+
+func (r *Router) buildTaskS3Client(c *gin.Context, s3ConfigID int64) s3.StorageClient {
+	var s3Config models.S3Config
+	if err := r.db.First(&s3Config, s3ConfigID).Error; err != nil {
+		r.logger.Warn("failed to get s3 config", zap.Int64("s3_config_id", s3ConfigID), zap.Error(err))
 		return nil
 	}
+
+	secretKey, err := r.encryptor.Decrypt(s3Config.SecretKeyEncrypted)
+	if err != nil {
+		r.logger.Warn("failed to decrypt s3 secret key", zap.Int64("s3_config_id", s3ConfigID), zap.Error(err))
+		return nil
+	}
+
+	s3Client, err := s3.NewStorageClient(c.Request.Context(), s3.Config{
+		Provider:   string(s3Config.Provider),
+		Endpoint:   s3Config.Endpoint,
+		AccessKey:  s3Config.AccessKey,
+		SecretKey:  secretKey,
+		Bucket:     s3Config.Bucket,
+		Region:     s3Config.Region,
+		PathPrefix: s3Config.PathPrefix,
+	})
+	if err != nil {
+		r.logger.Warn("failed to create s3 client", zap.Int64("s3_config_id", s3ConfigID), zap.Error(err))
+		return nil
+	}
+	return s3Client
+}
+
+func (r *Router) buildAdminTaskFiles(c *gin.Context, task models.ExportTask) ([]gin.H, string) {
+	taskFiles := parseAdminTaskFiles(task)
+	if len(taskFiles) == 0 {
+		return nil, ""
+	}
+
+	expiresIn := calcAdminPresignedExpire(task)
+	s3Client := r.buildTaskS3Client(c, task.S3ConfigID)
 	respFiles := make([]gin.H, 0, len(taskFiles))
+	primaryURL := ""
+
 	for i, file := range taskFiles {
 		name := file.Name
 		if strings.TrimSpace(name) == "" {
 			name = filepath.Base(file.Path)
+		}
+		url := file.Path
+		if s3Client != nil && task.Status == models.TaskStatusSuccess {
+			if presignedURL, err := s3Client.GetPresignedURL(c.Request.Context(), file.Path, expiresIn); err == nil {
+				url = presignedURL
+			}
+		}
+		if i == 0 {
+			primaryURL = url
 		}
 		respFiles = append(respFiles, gin.H{
 			"index":    i,
 			"name":     name,
 			"raw_name": file.RawName,
 			"path":     file.Path,
-			"url":      file.Path,
+			"url":      url,
 			"size":     file.Size,
 		})
 	}
-	return respFiles
+	return respFiles, primaryURL
 }
 
 // getStatisticsOverview 获取统计概览
@@ -1613,9 +1674,9 @@ func (r *Router) getDailyStatistics(c *gin.Context) {
 	}
 	var rows []DailyStat
 
-	r.buildStatisticsBaseQuery(c, startTime, endTime).
+	if err := r.buildStatisticsBaseQuery(c, startTime, endTime).
 		Select(`
-			DATE(created_at) as date,
+			DATE_FORMAT(created_at, '%Y-%m-%d') as date,
 			COUNT(*) as task_count,
 			SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
 			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
@@ -1624,7 +1685,11 @@ func (r *Router) getDailyStatistics(c *gin.Context) {
 		`).
 		Group("DATE(created_at)").
 		Order("date ASC").
-		Scan(&rows)
+		Scan(&rows).Error; err != nil {
+		r.logger.Error("failed to get daily statistics", zap.Error(err))
+		utils.InternalError(c, "查询失败")
+		return
+	}
 
 	rowMap := make(map[string]DailyStat, len(rows))
 	for _, item := range rows {

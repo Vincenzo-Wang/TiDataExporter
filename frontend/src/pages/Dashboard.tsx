@@ -22,6 +22,27 @@ const taskStatusMap: Record<TaskStatus, { color: string; text: string }> = {
   expired: { color: 'default', text: '已过期' },
 };
 
+const formatBytes = (size: number) => {
+  if (!size) return '-';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = size;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const digits = unitIndex === 0 ? 0 : 2;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+};
+
+const formatRows = (rows: number) => {
+  if (!rows) return '-';
+  if (rows < 10000) return `${rows.toLocaleString()} 行`;
+  if (rows < 100000000) return `${(rows / 10000).toFixed(2)} 万行`;
+  if (rows < 1000000000000) return `${(rows / 100000000).toFixed(2)} 亿行`;
+  return `${(rows / 1000000000000).toFixed(2)} 万亿行`;
+};
+
 export default function Dashboard() {
   const [statistics, setStatistics] = useState<TaskStatistics | null>(null);
   const [recentTasks, setRecentTasks] = useState<ExportTask[]>([]);
@@ -87,13 +108,7 @@ export default function Dashboard() {
       dataIndex: 'file_size',
       key: 'file_size',
       width: 100,
-      render: (size: number) => {
-        if (!size) return '-';
-        if (size < 1024) return `${size} B`;
-        if (size < 1024 * 1024) return `${(size / 1024).toFixed(2)} KB`;
-        if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(2)} MB`;
-        return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`;
-      },
+      render: (size: number) => formatBytes(size),
     },
     {
       title: '行数',
@@ -174,8 +189,7 @@ export default function Dashboard() {
           <Card loading={loading}>
             <Statistic
               title="总数据行数"
-              value={statistics?.total_rows || 0}
-              suffix="行"
+              value={formatRows(statistics?.total_rows || 0)}
             />
           </Card>
         </Col>
@@ -183,8 +197,7 @@ export default function Dashboard() {
           <Card loading={loading}>
             <Statistic
               title="总数据大小"
-              value={statistics?.total_size || 0}
-              suffix="bytes"
+              value={formatBytes(statistics?.total_size || 0)}
             />
           </Card>
         </Col>

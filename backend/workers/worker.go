@@ -184,6 +184,7 @@ func (w *Worker) handleTask(ctx context.Context, msg *queue.TaskMessage) error {
 		"file_url":     result.FileURL,
 		"file_urls":    string(fileURLsJSON),
 		"file_size":    result.FileSize,
+		"row_count":    result.RowCount,
 		"completed_at": completedAt,
 		"expires_at":   expiresAt,
 	}).Error; err != nil {
