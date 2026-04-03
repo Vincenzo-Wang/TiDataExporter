@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS admins (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_status (status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */ COMMENT='管理员账号表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci AUTO_ID_CACHE=1 COMMENT='管理员账号表';
 
 CREATE TABLE IF NOT EXISTS tenants (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     INDEX idx_status (status),
     INDEX idx_api_key (api_key),
     INDEX idx_deleted_at (deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */ COMMENT='租户信息表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci AUTO_ID_CACHE=1 COMMENT='租户信息表';
 
 CREATE TABLE IF NOT EXISTS tenant_quotas (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS tenant_quotas (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_tenant_id (tenant_id),
     INDEX idx_tenant_id (tenant_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */ COMMENT='租户配额表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci AUTO_ID_CACHE=1 COMMENT='租户配额表';
 
 CREATE TABLE IF NOT EXISTS tidb_configs (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS tidb_configs (
     INDEX idx_tenant_id (tenant_id),
     INDEX idx_tenant_default (tenant_id, is_default),
     INDEX idx_deleted_at (deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */ COMMENT='租户 TiDB 连接配置表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci AUTO_ID_CACHE=1 COMMENT='租户 TiDB 连接配置表';
 
 CREATE TABLE IF NOT EXISTS s3_configs (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -90,12 +90,13 @@ CREATE TABLE IF NOT EXISTS s3_configs (
     INDEX idx_tenant_id (tenant_id),
     INDEX idx_tenant_default (tenant_id, is_default),
     INDEX idx_deleted_at (deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */ COMMENT='S3/OSS 存储配置表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci AUTO_ID_CACHE=1 COMMENT='S3/OSS 存储配置表';
 
 CREATE TABLE IF NOT EXISTS export_tasks (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     tenant_id BIGINT NOT NULL,
-    task_name VARCHAR(255) DEFAULT NULL,
+    task_name VARCHAR(255) NOT NULL DEFAULT '',
+    biz_name VARCHAR(64) NOT NULL DEFAULT '',
     tidb_config_id BIGINT NOT NULL,
     s3_config_id BIGINT NOT NULL,
     sql_text TEXT NOT NULL,
@@ -125,7 +126,7 @@ CREATE TABLE IF NOT EXISTS export_tasks (
     INDEX idx_priority (priority),
     INDEX idx_created_at (created_at),
     INDEX idx_expires_at (expires_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */ COMMENT='数据导出任务表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci AUTO_ID_CACHE=1 COMMENT='数据导出任务表';
 
 CREATE TABLE IF NOT EXISTS task_logs (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -135,7 +136,7 @@ CREATE TABLE IF NOT EXISTS task_logs (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_task_id (task_id),
     INDEX idx_task_created (task_id, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */ COMMENT='任务执行日志表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci AUTO_ID_CACHE=1 COMMENT='任务执行日志表';
 
 CREATE TABLE IF NOT EXISTS audit_logs (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -153,7 +154,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     INDEX idx_tenant_created (tenant_id, created_at),
     INDEX idx_admin_created (admin_id, created_at),
     INDEX idx_resource (resource_type, resource_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */ COMMENT='管理操作审计日志表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci AUTO_ID_CACHE=1 COMMENT='管理操作审计日志表';
 
 CREATE TABLE IF NOT EXISTS dumpling_templates (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -170,7 +171,7 @@ CREATE TABLE IF NOT EXISTS dumpling_templates (
     UNIQUE KEY uk_tenant_name (tenant_id, name),
     INDEX idx_tenant_id (tenant_id),
     INDEX idx_deleted_at (deleted_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci /*T![auto_id_cache] AUTO_ID_CACHE=1 */ COMMENT='Dumpling 参数模板表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci AUTO_ID_CACHE=1 COMMENT='Dumpling 参数模板表';
 
 INSERT INTO admins (username, password_hash, email, role, status)
 SELECT 'admin', '$2y$10$WdQsrT8PpgRYm1Q6zlzZTOtbu8LwcpTKMThRdyiWC5t6uk9oZ5zjC', 'admin@example.com', 'admin', 1
