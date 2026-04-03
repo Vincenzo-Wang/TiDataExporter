@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"claw-export-platform/api/middleware"
 	"claw-export-platform/api/utils"
@@ -49,6 +50,7 @@ type CreateTaskRequest struct {
 	Compress       string `json:"compress"`
 	RetentionHours int    `json:"retention_hours"`
 	TaskName       string `json:"task_name"`
+	BizName        string `json:"biz_name"`
 	Priority       int    `json:"priority"`
 }
 
@@ -59,6 +61,16 @@ func (h *ExportHandler) CreateTask(c *gin.Context) {
 	var req CreateTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequest(c, "参数验证失败: "+err.Error())
+		return
+	}
+
+	req.TaskName = strings.TrimSpace(req.TaskName)
+	req.BizName = strings.TrimSpace(req.BizName)
+	if utf8.RuneCountInString(req.BizName) > 64 {
+		utils.BadRequestWithData(c, "参数验证失败", gin.H{
+			"field": "biz_name",
+			"error": "长度不能超过64个字符",
+		})
 		return
 	}
 
@@ -121,6 +133,7 @@ func (h *ExportHandler) CreateTask(c *gin.Context) {
 	task := &models.ExportTask{
 		TenantID:       tenantID,
 		TaskName:       req.TaskName,
+		BizName:        req.BizName,
 		TiDBConfigID:   tidbConfig.ID,
 		S3ConfigID:     s3Config.ID,
 		SqlText:        req.SqlText,
@@ -173,6 +186,7 @@ func (h *ExportHandler) GetTask(c *gin.Context) {
 	data := gin.H{
 		"task_id":       task.ID,
 		"task_name":     task.TaskName,
+		"biz_name":      task.BizName,
 		"status":        task.Status,
 		"file_url":      fileURL,
 		"files":         files,
@@ -263,8 +277,10 @@ func (h *ExportHandler) BatchQuery(c *gin.Context) {
 	results := make([]gin.H, len(tasks))
 	for i, task := range tasks {
 		result := gin.H{
-			"task_id": task.ID,
-			"status":  task.Status,
+			"task_id":   task.ID,
+			"task_name": task.TaskName,
+			"biz_name":  task.BizName,
+			"status":    task.Status,
 		}
 
 		files, fileURL := h.buildTaskFilesResponse(c, task, s3Clients[task.S3ConfigID])
@@ -333,11 +349,12 @@ func (h *ExportHandler) GetFile(c *gin.Context) {
 			url = presignedURL
 		}
 		respFiles = append(respFiles, gin.H{
-			"index": i,
-			"name":  fileNameOf(file),
-			"path":  file.Path,
-			"url":   url,
-			"size":  file.Size,
+			"index":    i,
+			"name":     fileNameOf(file),
+			"raw_name": file.RawName,
+			"path":     file.Path,
+			"url":      url,
+			"size":     file.Size,
 		})
 	}
 
@@ -350,9 +367,10 @@ func (h *ExportHandler) GetFile(c *gin.Context) {
 }
 
 type taskFile struct {
-	Path string `json:"path"`
-	Name string `json:"name"`
-	Size int64  `json:"size"`
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+	RawName string `json:"raw_name"`
+	Size    int64  `json:"size"`
 }
 
 func parseTaskFiles(task models.ExportTask) []taskFile {
@@ -445,11 +463,12 @@ func (h *ExportHandler) buildTaskFilesResponse(c *gin.Context, task models.Expor
 			primaryURL = url
 		}
 		respFiles = append(respFiles, gin.H{
-			"index": i,
-			"name":  fileNameOf(file),
-			"path":  file.Path,
-			"url":   url,
-			"size":  file.Size,
+			"index":    i,
+			"name":     fileNameOf(file),
+			"raw_name": file.RawName,
+			"path":     file.Path,
+			"url":      url,
+			"size":     file.Size,
 		})
 	}
 

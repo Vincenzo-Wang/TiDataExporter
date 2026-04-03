@@ -2,7 +2,9 @@ package cleanup
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"claw-export-platform/models"
@@ -147,11 +149,6 @@ func (c *Cleaner) cleanExpiredFiles(ctx context.Context) (int, error) {
 
 // cleanTaskFiles 清理单个任务的文件
 func (c *Cleaner) cleanTaskFiles(ctx context.Context, task *models.ExportTask) error {
-	// 如果没有文件URL，跳过
-	if task.FileURL == "" {
-		return nil
-	}
-
 	// 获取S3配置
 	var s3Config models.S3Config
 	if err := c.db.WithContext(ctx).First(&s3Config, task.S3ConfigID).Error; err != nil {
@@ -178,18 +175,72 @@ func (c *Cleaner) cleanTaskFiles(ctx context.Context, task *models.ExportTask) e
 		return fmt.Errorf("failed to create s3 client: %w", err)
 	}
 
-	// 删除S3上的文件
-	prefix := fmt.Sprintf("exports/%d/", task.ID)
-	if err := s3Client.DeleteByPrefix(ctx, prefix); err != nil {
-		return fmt.Errorf("failed to delete s3 files: %w", err)
+	filePaths := extractTaskFilePaths(task)
+	if len(filePaths) > 0 {
+		for _, path := range filePaths {
+			if err := s3Client.Delete(ctx, path); err != nil {
+				return fmt.Errorf("failed to delete s3 file %s: %w", path, err)
+			}
+		}
+
+		c.logger.Info("deleted task files from s3",
+			zap.Int64("task_id", task.ID),
+			zap.Int("file_count", len(filePaths)),
+		)
+		return nil
 	}
 
-	c.logger.Info("deleted task files from s3",
+	if strings.TrimSpace(task.FileURL) != "" {
+		if err := s3Client.Delete(ctx, task.FileURL); err == nil {
+			c.logger.Info("deleted task single file from s3",
+				zap.Int64("task_id", task.ID),
+				zap.String("path", task.FileURL),
+			)
+			return nil
+		}
+	}
+
+	prefix := fmt.Sprintf("exports/%d/", task.ID)
+	if err := s3Client.DeleteByPrefix(ctx, prefix); err != nil {
+		return fmt.Errorf("failed to delete s3 files by prefix: %w", err)
+	}
+
+	c.logger.Info("deleted task files from s3 by prefix fallback",
 		zap.Int64("task_id", task.ID),
 		zap.String("prefix", prefix),
 	)
 
 	return nil
+}
+
+func extractTaskFilePaths(task *models.ExportTask) []string {
+	type taskFile struct {
+		Path string `json:"path"`
+	}
+
+	if strings.TrimSpace(task.FileURLs) == "" {
+		return nil
+	}
+
+	var files []taskFile
+	if err := json.Unmarshal([]byte(task.FileURLs), &files); err != nil {
+		return nil
+	}
+
+	pathSet := make(map[string]struct{}, len(files))
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		path := strings.TrimSpace(file.Path)
+		if path == "" {
+			continue
+		}
+		if _, exists := pathSet[path]; exists {
+			continue
+		}
+		pathSet[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 // cleanOldTaskLogs 清理旧任务日志

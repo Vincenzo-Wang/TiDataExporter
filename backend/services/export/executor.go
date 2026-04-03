@@ -38,7 +38,7 @@ func NewExecutor(db *gorm.DB, encryptor *encryption.Encryptor, workDir string, l
 }
 
 // Execute 执行导出任务
-func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models.TiDBConfig, s3Config *models.S3Config, sqlText, filetype, compress string) (*ExecutionResult, error) {
+func (e *Executor) Execute(ctx context.Context, taskID, tenantID int64, bizName, taskName string, tidbConfig *models.TiDBConfig, s3Config *models.S3Config, sqlText, filetype, compress string) (*ExecutionResult, error) {
 	// 解密S3密钥
 	secretKey, err := e.encryptor.Decrypt(s3Config.SecretKeyEncrypted)
 	if err != nil {
@@ -138,6 +138,9 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 		contentType = "text/csv"
 	}
 
+	resolvedBizName := resolveBizName(bizName, taskName)
+	bizSlug := normalizeBizSlug(resolvedBizName)
+
 	var totalFileSize int64
 	resultFiles := make([]ExecutionFile, 0, len(files))
 
@@ -150,10 +153,7 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 		totalFileSize += fileSize
 
 		ext := buildOutputFileExt(outputFile, filetype, compress)
-		s3Key := fmt.Sprintf("exports/%d/output%s", taskID, ext)
-		if len(files) > 1 {
-			s3Key = fmt.Sprintf("exports/%d/output_%06d%s", taskID, i+1, ext)
-		}
+		s3Key := fmt.Sprintf("exports/%d/%s/%d/part_%06d%s", tenantID, bizSlug, taskID, i+1, ext)
 
 		if s3Client != nil {
 			file, err := os.Open(outputFile)
@@ -169,9 +169,10 @@ func (e *Executor) Execute(ctx context.Context, taskID int64, tidbConfig *models
 		}
 
 		resultFiles = append(resultFiles, ExecutionFile{
-			Path: s3Key,
-			Name: filepath.Base(outputFile),
-			Size: fileSize,
+			Path:    s3Key,
+			Name:    buildDisplayName(resolvedBizName, taskID, i+1, ext),
+			RawName: filepath.Base(outputFile),
+			Size:    fileSize,
 		})
 	}
 
@@ -199,11 +200,12 @@ type ExecutionResult struct {
 }
 
 // ExecutionFile 导出结果文件
-// Path 为对象存储中的 key，Name 为原始文件名，Size 为文件大小（字节）
+// Path 为对象存储中的 key，Name 为下载展示名，RawName 为本地原始名，Size 为文件大小（字节）
 type ExecutionFile struct {
-	Path string `json:"path"`
-	Name string `json:"name"`
-	Size int64  `json:"size"`
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+	RawName string `json:"raw_name"`
+	Size    int64  `json:"size"`
 }
 
 func buildOutputFileExt(outputFile, filetype, compress string) string {
@@ -226,6 +228,76 @@ func buildOutputFileExt(outputFile, filetype, compress string) string {
 		return "." + filetype + "." + compress
 	}
 	return "." + filetype
+}
+
+func resolveBizName(bizName, taskName string) string {
+	if v := strings.TrimSpace(bizName); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(taskName); v != "" {
+		return v
+	}
+	return "export"
+}
+
+func normalizeBizSlug(name string) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range lower {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_':
+			b.WriteRune(r)
+			lastDash = false
+		case r == '-':
+			if b.Len() == 0 || lastDash {
+				continue
+			}
+			b.WriteRune('-')
+			lastDash = true
+		default:
+			if b.Len() == 0 || lastDash {
+				continue
+			}
+			b.WriteRune('-')
+			lastDash = true
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		slug = "export"
+	}
+	runes := []rune(slug)
+	if len(runes) > 40 {
+		slug = strings.Trim(string(runes[:40]), "-")
+	}
+	if slug == "" {
+		return "export"
+	}
+	return slug
+}
+
+func buildDisplayName(bizName string, taskID int64, index int, ext string) string {
+	name := strings.TrimSpace(bizName)
+	if name == "" {
+		name = "export"
+	}
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.Join(strings.Fields(name), "_")
+	if name == "" {
+		name = "export"
+	}
+	suffix := fmt.Sprintf("_%d_part%03d%s", taskID, index, ext)
+	maxNameRunes := 128 - len([]rune(suffix))
+	if maxNameRunes < 1 {
+		maxNameRunes = 1
+	}
+	nameRunes := []rune(name)
+	if len(nameRunes) > maxNameRunes {
+		name = string(nameRunes[:maxNameRunes])
+	}
+	return name + suffix
 }
 
 func (e *Executor) buildDumplingCommand(tidbConfig *models.TiDBConfig, password, sqlText, filetype, compress, outputDir string) *exec.Cmd {

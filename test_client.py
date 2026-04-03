@@ -67,6 +67,9 @@ class ExportClient:
         name = file_item.get("name") or ""
         if name:
             return name
+        raw_name = file_item.get("raw_name") or ""
+        if raw_name:
+            return raw_name
         parsed = urllib.parse.urlparse(file_item.get("url") or "")
         candidate = os.path.basename(parsed.path)
         return candidate or fallback
@@ -135,6 +138,7 @@ def main():
     parser.add_argument("--filetype", default="csv", choices=["sql", "csv"], help="导出文件类型")
     parser.add_argument("--compress", default="gz", choices=["gz", "zstd", "snappy", "none"], help="压缩格式")
     parser.add_argument("--task-name", default="测试导出", help="任务名称")
+    parser.add_argument("--biz-name", default="", help="业务名称（用于文件展示名与对象路径命名）")
     parser.add_argument("--output", default="output", help="下载输出路径（单文件=文件路径，多文件=目录路径）")
     parser.add_argument("--file-index", type=int, help="多文件下载时指定文件下标（从 0 开始）")
 
@@ -151,6 +155,7 @@ def main():
             filetype=args.filetype,
             compress=args.compress if args.compress != "none" else None,
             task_name=args.task_name,
+            biz_name=args.biz_name,
         )
         print(json.dumps(result, indent=2, ensure_ascii=False))
 
@@ -159,6 +164,11 @@ def main():
             print("错误: 需要指定 --task-id")
             sys.exit(1)
         result = client.get_task(args.task_id)
+        data = result.get("data", {}) if isinstance(result, dict) else {}
+        if data:
+            print(f"任务名称: {data.get('task_name') or '-'} | 业务名称: {data.get('biz_name') or '-'}")
+            for i, f in enumerate(data.get("files") or []):
+                print(f"  文件{i}: name={f.get('name')}, raw_name={f.get('raw_name')}, path={f.get('path')}")
         print(json.dumps(result, indent=2, ensure_ascii=False))
 
     elif args.action == "cancel":
@@ -186,7 +196,9 @@ def main():
             data = task.get("data", {})
             status = data.get("status", "unknown")
             file_count = data.get("file_count") or len(data.get("files") or [])
-            print(f"状态: {status} (file_count={file_count})")
+            biz_name = data.get("biz_name") or "-"
+            task_name = data.get("task_name") or "-"
+            print(f"状态: {status} (file_count={file_count}) task_name={task_name} biz_name={biz_name}")
             print(json.dumps(task, indent=2, ensure_ascii=False))
 
             if status in ["success", "failed", "canceled"]:

@@ -585,6 +585,7 @@ func (r *Router) listTasks(c *gin.Context) {
 		item := gin.H{
 			"task_id":         task.ID,
 			"task_name":       task.TaskName,
+			"biz_name":        task.BizName,
 			"tenant_id":       task.TenantID,
 			"tidb_config_id":  task.TiDBConfigID,
 			"s3_config_id":    task.S3ConfigID,
@@ -687,6 +688,7 @@ func (r *Router) getTask(c *gin.Context) {
 	data := gin.H{
 		"task_id":          task.ID,
 		"task_name":        task.TaskName,
+		"biz_name":         task.BizName,
 		"tenant_id":        task.TenantID,
 		"tenant_name":      task.Tenant.Name,
 		"tidb_config_id":   task.TiDBConfigID,
@@ -1484,9 +1486,10 @@ func jsonMarshal(v interface{}) ([]byte, error) {
 }
 
 type adminTaskFile struct {
-	Path string `json:"path"`
-	Name string `json:"name"`
-	Size int64  `json:"size"`
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+	RawName string `json:"raw_name"`
+	Size    int64  `json:"size"`
 }
 
 func parseAdminTaskFiles(task models.ExportTask) []adminTaskFile {
@@ -1518,11 +1521,12 @@ func buildAdminTaskFiles(task models.ExportTask) []gin.H {
 			name = filepath.Base(file.Path)
 		}
 		respFiles = append(respFiles, gin.H{
-			"index": i,
-			"name":  name,
-			"path":  file.Path,
-			"url":   file.Path,
-			"size":  file.Size,
+			"index":    i,
+			"name":     name,
+			"raw_name": file.RawName,
+			"path":     file.Path,
+			"url":      file.Path,
+			"size":     file.Size,
 		})
 	}
 	return respFiles
@@ -1722,12 +1726,12 @@ func parseTenantStatisticsOptions(c *gin.Context) (string, int, error) {
 	order := c.DefaultQuery("order", "desc")
 
 	sortFieldMap := map[string]string{
-		"task_count":   "task_count",
+		"task_count":    "task_count",
 		"success_count": "success_count",
-		"failed_count": "failed_count",
-		"success_rate": "success_rate",
-		"failure_rate": "failure_rate",
-		"total_size":   "total_size",
+		"failed_count":  "failed_count",
+		"success_rate":  "success_rate",
+		"failure_rate":  "failure_rate",
+		"total_size":    "total_size",
 	}
 	field, ok := sortFieldMap[sortBy]
 	if !ok {

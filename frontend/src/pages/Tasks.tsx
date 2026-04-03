@@ -32,6 +32,8 @@ const compressMap: Record<string, string> = {
   snappy: 'Snappy',
 };
 
+const getPrimaryTaskName = (task: ExportTask) => task.biz_name || task.task_name || `任务#${task.task_id}`;
+
 export default function Tasks() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -120,11 +122,21 @@ export default function Tasks() {
       ),
     },
     {
-      title: '任务名称',
-      dataIndex: 'task_name',
-      key: 'task_name',
-      width: 150,
+      title: '业务名称',
+      dataIndex: 'biz_name',
+      key: 'biz_name',
+      width: 220,
       ellipsis: true,
+      render: (_: string, record: ExportTask) => {
+        const primaryName = getPrimaryTaskName(record);
+        const secondaryName = record.biz_name && record.task_name && record.task_name !== record.biz_name ? record.task_name : '';
+        return (
+          <Space direction="vertical" size={0} style={{ lineHeight: 1.3 }}>
+            <span title={primaryName}>{primaryName}</span>
+            {secondaryName ? <span style={{ color: '#999', fontSize: 12 }} title={secondaryName}>任务名：{secondaryName}</span> : null}
+          </Space>
+        );
+      },
     },
     {
       title: '租户',
@@ -245,7 +257,7 @@ export default function Tasks() {
       >
         <Space style={{ marginBottom: 16 }} wrap>
           <Input
-            placeholder="搜索任务名称"
+            placeholder="搜索任务名称/业务名称"
             prefix={<SearchOutlined />}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}

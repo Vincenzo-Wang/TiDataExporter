@@ -18,31 +18,32 @@ const (
 
 // ExportTask 导出任务
 type ExportTask struct {
-	ID              int64      `gorm:"primaryKey;autoIncrement" json:"id"`
-	TenantID        int64      `gorm:"not null;index:idx_tenant_status,column:tenant_id" json:"tenant_id"`
-	TaskName        string     `gorm:"type:varchar(255);column:task_name" json:"task_name"`
-	TiDBConfigID    int64      `gorm:"not null;column:tidb_config_id" json:"tidb_config_id"`
-	S3ConfigID      int64      `gorm:"not null;column:s3_config_id" json:"s3_config_id"`
-	SqlText         string     `gorm:"type:text;not null;column:sql_text" json:"sql_text"`
-	Filetype        string     `gorm:"type:varchar(10);default:sql" json:"filetype"`
-	Compress        string     `gorm:"type:varchar(20)" json:"compress"`
-	RetentionHours  int        `gorm:"default:168;column:retention_hours" json:"retention_hours"`
-	Priority        int        `gorm:"default:5;index:idx_priority" json:"priority"`
-	Status          string     `gorm:"type:varchar(20);default:pending;index:idx_tenant_status" json:"status"`
-	FileURL         string     `gorm:"type:varchar(500);column:file_url" json:"file_url"`
-	FileURLs        string     `gorm:"type:json;column:file_urls" json:"file_urls"`
-	FileSize        int64      `gorm:"column:file_size" json:"file_size"`
-	RowCount        int64      `gorm:"column:row_count" json:"row_count"`
-	ErrorMessage    string     `gorm:"type:text;column:error_message" json:"error_message"`
-	CancelReason    string     `gorm:"type:text;column:cancel_reason" json:"cancel_reason"`
-	RetryCount      int        `gorm:"default:0;column:retry_count" json:"retry_count"`
-	MaxRetries      int        `gorm:"default:3;column:max_retries" json:"max_retries"`
-	StartedAt       *time.Time `gorm:"precision:0" json:"started_at"`
-	CompletedAt     *time.Time `gorm:"precision:0" json:"completed_at"`
-	ExpiresAt       *time.Time `gorm:"precision:0;index:idx_expires_at" json:"expires_at"`
-	CanceledAt      *time.Time `gorm:"precision:0" json:"canceled_at"`
-	CreatedAt       time.Time  `gorm:"precision:0;index:idx_created_at" json:"created_at"`
-	UpdatedAt       time.Time  `gorm:"precision:0;autoUpdateTime" json:"updated_at"`
+	ID             int64      `gorm:"primaryKey;autoIncrement" json:"id"`
+	TenantID       int64      `gorm:"not null;index:idx_tenant_status,column:tenant_id" json:"tenant_id"`
+	TaskName       string     `gorm:"type:varchar(255);column:task_name" json:"task_name"`
+	BizName        string     `gorm:"type:varchar(64);not null;default:'';column:biz_name" json:"biz_name"`
+	TiDBConfigID   int64      `gorm:"not null;column:tidb_config_id" json:"tidb_config_id"`
+	S3ConfigID     int64      `gorm:"not null;column:s3_config_id" json:"s3_config_id"`
+	SqlText        string     `gorm:"type:text;not null;column:sql_text" json:"sql_text"`
+	Filetype       string     `gorm:"type:varchar(10);default:sql" json:"filetype"`
+	Compress       string     `gorm:"type:varchar(20)" json:"compress"`
+	RetentionHours int        `gorm:"default:168;column:retention_hours" json:"retention_hours"`
+	Priority       int        `gorm:"default:5;index:idx_priority" json:"priority"`
+	Status         string     `gorm:"type:varchar(20);default:pending;index:idx_tenant_status" json:"status"`
+	FileURL        string     `gorm:"type:varchar(500);column:file_url" json:"file_url"`
+	FileURLs       string     `gorm:"type:json;column:file_urls" json:"file_urls"`
+	FileSize       int64      `gorm:"column:file_size" json:"file_size"`
+	RowCount       int64      `gorm:"column:row_count" json:"row_count"`
+	ErrorMessage   string     `gorm:"type:text;column:error_message" json:"error_message"`
+	CancelReason   string     `gorm:"type:text;column:cancel_reason" json:"cancel_reason"`
+	RetryCount     int        `gorm:"default:0;column:retry_count" json:"retry_count"`
+	MaxRetries     int        `gorm:"default:3;column:max_retries" json:"max_retries"`
+	StartedAt      *time.Time `gorm:"precision:0" json:"started_at"`
+	CompletedAt    *time.Time `gorm:"precision:0" json:"completed_at"`
+	ExpiresAt      *time.Time `gorm:"precision:0;index:idx_expires_at" json:"expires_at"`
+	CanceledAt     *time.Time `gorm:"precision:0" json:"canceled_at"`
+	CreatedAt      time.Time  `gorm:"precision:0;index:idx_created_at" json:"created_at"`
+	UpdatedAt      time.Time  `gorm:"precision:0;autoUpdateTime" json:"updated_at"`
 
 	// 关联字段（不存储在数据库）
 	Tenant Tenant `gorm:"foreignKey:TenantID" json:"tenant,omitempty"`

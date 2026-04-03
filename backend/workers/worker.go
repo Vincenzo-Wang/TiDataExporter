@@ -165,7 +165,7 @@ func (w *Worker) handleTask(ctx context.Context, msg *queue.TaskMessage) error {
 
 	// 创建执行器并执行
 	executor := export.NewExecutor(w.db, w.encryptor, w.workDir, w.logger)
-	result, err := executor.Execute(ctx, task.ID, &tidbConfig, &s3Config, msg.SqlText, msg.Filetype, msg.Compress)
+	result, err := executor.Execute(ctx, task.ID, task.TenantID, task.BizName, task.TaskName, &tidbConfig, &s3Config, msg.SqlText, msg.Filetype, msg.Compress)
 	if err != nil {
 		return err
 	}

@@ -134,6 +134,7 @@ Content-Type: application/json
   "compress": "gzip",
   "retention_hours": 168,
   "task_name": "用户数据导出",
+  "biz_name": "账单月报",
   "priority": 5
 }
 ```
@@ -148,8 +149,15 @@ Content-Type: application/json
 | filetype | string | 否 | 文件类型：`sql`（默认）、`csv` |
 | compress | string | 否 | 压缩方式：`gzip`、`snappy`、`zstd`、空（不压缩） |
 | retention_hours | int | 否 | 文件保留时间（小时），默认 168（7天） |
-| task_name | string | 否 | 任务名称 |
+| task_name | string | 否 | 任务名称（展示用途） |
+| biz_name | string | 否 | 业务名称（1~64 字符，优先用于文件命名展示） |
 | priority | int | 否 | 优先级 1-10，默认 5，越大越优先 |
+
+**命名字段说明**
+
+- `task_name`：任务展示名（管理/排障场景）
+- `biz_name`：业务名（用于文件展示名与对象路径中的业务前缀）
+- 当未传 `biz_name` 时，系统会回退使用 `task_name`，再回退为 `export`
 
 **SQL 安全限制**
 
@@ -210,20 +218,23 @@ X-API-Secret: your-api-secret
   "data": {
     "task_id": 123456789,
     "task_name": "用户数据导出",
+    "biz_name": "账单月报",
     "status": "success",
     "file_url": "https://signed-url-for-first-file",
     "files": [
       {
         "index": 0,
-        "name": "result.000000000.sql.gz",
-        "path": "exports/123456789/output_000001.sql.gz",
+        "name": "账单月报_123456789_part001.sql.gz",
+        "raw_name": "result.000000000.sql.gz",
+        "path": "exports/1/zhang-dan-yue-bao/123456789/part_000001.sql.gz",
         "url": "https://signed-url-1",
         "size": 524288
       },
       {
         "index": 1,
-        "name": "result.000000001.sql.gz",
-        "path": "exports/123456789/output_000002.sql.gz",
+        "name": "账单月报_123456789_part002.sql.gz",
+        "raw_name": "result.000000001.sql.gz",
+        "path": "exports/1/zhang-dan-yue-bao/123456789/part_000002.sql.gz",
         "url": "https://signed-url-2",
         "size": 524288
       }
@@ -237,6 +248,12 @@ X-API-Secret: your-api-secret
   }
 }
 ```
+
+**文件字段说明**
+
+- `name`：对外展示/下载文件名（包含业务语义）
+- `raw_name`：导出工具生成的本地原始文件名（用于排障审计）
+- `path`：对象存储 key（用于定位与签名，不建议直接作为展示名）
 
 **任务状态说明**
 
@@ -313,20 +330,24 @@ Content-Type: application/json
   "data": [
     {
       "task_id": 123456789,
+      "task_name": "用户数据导出",
+      "biz_name": "账单月报",
       "status": "success",
       "file_url": "https://signed-url-for-first-file",
       "files": [
         {
           "index": 0,
-          "name": "part-000.sql.gz",
-          "path": "exports/123456789/output_000001.sql.gz",
+          "name": "账单月报_123456789_part001.sql.gz",
+          "raw_name": "result.000000000.sql.gz",
+          "path": "exports/1/zhang-dan-yue-bao/123456789/part_000001.sql.gz",
           "url": "https://signed-url-1",
           "size": 524288
         },
         {
           "index": 1,
-          "name": "part-001.sql.gz",
-          "path": "exports/123456789/output_000002.sql.gz",
+          "name": "账单月报_123456789_part002.sql.gz",
+          "raw_name": "result.000000001.sql.gz",
+          "path": "exports/1/zhang-dan-yue-bao/123456789/part_000002.sql.gz",
           "url": "https://signed-url-2",
           "size": 524288
         }
@@ -363,7 +384,7 @@ X-API-Secret: your-api-secret
 **响应**
 
 - 单文件：返回 HTTP 302，重定向到文件的预签名下载地址（兼容旧行为）
-- 多文件：返回 JSON 清单（`code=0`），包含 `files` 数组（每项含 `index/name/path/url/size`）
+- 多文件：返回 JSON 清单（`code=0`），包含 `files` 数组（每项含 `index/name/raw_name/path/url/size`）
 
 多文件返回示例：
 
@@ -378,15 +399,17 @@ X-API-Secret: your-api-secret
     "files": [
       {
         "index": 0,
-        "name": "part-000.sql.gz",
-        "path": "exports/123456789/output_000001.sql.gz",
+        "name": "账单月报_123456789_part001.sql.gz",
+        "raw_name": "result.000000000.sql.gz",
+        "path": "exports/1/zhang-dan-yue-bao/123456789/part_000001.sql.gz",
         "url": "https://signed-url-1",
         "size": 524288
       },
       {
         "index": 1,
-        "name": "part-001.sql.gz",
-        "path": "exports/123456789/output_000002.sql.gz",
+        "name": "账单月报_123456789_part002.sql.gz",
+        "raw_name": "result.000000001.sql.gz",
+        "path": "exports/1/zhang-dan-yue-bao/123456789/part_000002.sql.gz",
         "url": "https://signed-url-2",
         "size": 524288
       }
@@ -763,8 +786,9 @@ Authorization: Bearer <token>
     "page_size": 20,
     "items": [
       {
-        "id": 123456789,
+        "task_id": 123456789,
         "task_name": "用户数据导出",
+        "biz_name": "账单月报",
         "tenant_id": 1,
         "status": "success",
         "file_size": 1048576,
@@ -795,8 +819,9 @@ Authorization: Bearer <token>
   "code": 0,
   "message": "success",
   "data": {
-    "id": 123456789,
+    "task_id": 123456789,
     "task_name": "用户数据导出",
+    "biz_name": "账单月报",
     "tenant_id": 1,
     "sql_text": "SELECT * FROM users WHERE ...",
     "filetype": "sql",
@@ -1023,6 +1048,4 @@ Authorization: Bearer <token>
 - GitHub Issues: [项目地址]/issues
 - 邮件: support@example.com
 
----
-
-*最后更新: 2026-04-02*
+--

@@ -59,9 +59,10 @@ export type TaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancele
 
 export interface ExportTaskFile {
   index?: number;
-  name: string;
+  name?: string;
+  raw_name?: string;
   path: string;
-  url: string;
+  url?: string;
   size: number;
 }
 
@@ -71,6 +72,7 @@ export interface ExportTask {
   tenant_id: number;
   tenant_name: string;
   task_name: string;
+  biz_name?: string;
   tidb_config_id: number;
   tidb_config_name: string;
   s3_config_id: number;

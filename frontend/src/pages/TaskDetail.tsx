@@ -17,6 +17,8 @@ const taskStatusMap: Record<TaskStatus, { color: string; text: string }> = {
   expired: { color: 'default', text: '已过期' },
 };
 
+const getPrimaryTaskName = (task: ExportTask) => task.biz_name || task.task_name || `任务#${task.task_id}`;
+
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -104,12 +106,18 @@ export default function TaskDetail() {
 
   const fileColumns = [
     {
-      title: '文件名',
+      title: '展示名',
       dataIndex: 'name',
       key: 'name',
       width: 260,
       render: (name: string, _: ExportTaskFile, index: number) => name || `文件 ${index + 1}`,
-
+    },
+    {
+      title: '原始名',
+      dataIndex: 'raw_name',
+      key: 'raw_name',
+      width: 220,
+      render: (rawName: string) => rawName || '-',
     },
     {
       title: '大小',
@@ -119,11 +127,11 @@ export default function TaskDetail() {
       render: (size: number) => formatSize(size || 0),
     },
     {
-      title: '文件路径',
-      dataIndex: 'url',
-      key: 'url',
+      title: '对象路径',
+      dataIndex: 'path',
+      key: 'path',
       ellipsis: true,
-      render: (url: string, record: ExportTaskFile) => <Text copyable={{ text: url || record.path }}>{url || record.path}</Text>,
+      render: (path: string) => <Text copyable={{ text: path }}>{path}</Text>,
     },
     {
       title: '操作',
@@ -166,6 +174,7 @@ export default function TaskDetail() {
       <Card title={`任务详情 - #${task.task_id}`} loading={loading}>
         <Descriptions column={2} bordered>
           <Descriptions.Item label="任务ID">{task.task_id}</Descriptions.Item>
+          <Descriptions.Item label="业务名称">{getPrimaryTaskName(task)}</Descriptions.Item>
           <Descriptions.Item label="任务名称">{task.task_name || '-'}</Descriptions.Item>
           <Descriptions.Item label="租户">{task.tenant_name || `ID: ${task.tenant_id}`}</Descriptions.Item>
           <Descriptions.Item label="状态">
@@ -200,7 +209,7 @@ export default function TaskDetail() {
               <Text>-</Text>
             ) : (
               <Space direction="vertical" style={{ width: '100%' }} size={8}>
-                <Text type="secondary">共 {task.file_count || fileList.length} 个文件（分页展示，每页 20 条）</Text>
+                <Text type="secondary">共 {task.file_count || fileList.length} 个文件（展示名/原始名/对象路径，分页展示每页 20 条）</Text>
                 <Table
                   rowKey={(record, index) => `${record.path}-${index}`}
                   size="small"
