@@ -15,6 +15,7 @@ import (
 	"claw-export-platform/models"
 	"claw-export-platform/pkg/encryption"
 	"claw-export-platform/pkg/queue"
+	"claw-export-platform/services/s3"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
