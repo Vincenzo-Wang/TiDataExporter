@@ -1620,7 +1620,7 @@ func (r *Router) getStatisticsOverview(c *gin.Context) {
 	}
 
 	var totalTasks int64
-	query.Count(&totalTasks)
+	r.buildStatisticsBaseQuery(c, startTime, endTime).Count(&totalTasks)
 
 	type SumResult struct {
 		TotalRows int64

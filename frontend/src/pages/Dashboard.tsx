@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Row, Col, Card, Statistic, Table, Tag, Progress, Typography } from 'antd';
+import { Row, Col, Card, Statistic, Table, Tag, Progress, Typography, DatePicker, Select, Space } from 'antd';
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
@@ -8,10 +8,29 @@ import {
   SyncOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import dayjs from 'dayjs';
 import api from '@/services/api';
 import type { ApiResponse, ExportTask, TaskStatus, TaskStatistics } from '@/types';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
+const { RangePicker } = DatePicker;
+
+type RangePreset = '7d' | '30d' | '90d' | 'all' | 'custom';
+
+const getPresetRange = (preset: Exclude<RangePreset, 'custom'>): [dayjs.Dayjs, dayjs.Dayjs] => {
+  const now = dayjs();
+  switch (preset) {
+    case '7d':
+      return [now.subtract(7, 'day'), now];
+    case '90d':
+      return [now.subtract(90, 'day'), now];
+    case 'all':
+      return [dayjs('1970-01-01'), now];
+    case '30d':
+    default:
+      return [now.subtract(30, 'day'), now];
+  }
+};
 
 const taskStatusMap: Record<TaskStatus, { color: string; text: string }> = {
   pending: { color: 'default', text: '待处理' },
@@ -47,19 +66,26 @@ export default function Dashboard() {
   const [statistics, setStatistics] = useState<TaskStatistics | null>(null);
   const [recentTasks, setRecentTasks] = useState<ExportTask[]>([]);
   const [loading, setLoading] = useState(false);
+  const [rangePreset, setRangePreset] = useState<RangePreset>('30d');
+  const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>(getPresetRange('30d'));
 
   useEffect(() => {
     fetchDashboardData();
-  }, []);
+  }, [dateRange]);
 
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
+      const statsParams = new URLSearchParams({
+        start_date: dateRange[0].format('YYYY-MM-DD'),
+        end_date: dateRange[1].format('YYYY-MM-DD'),
+      });
+
       const [statsRes, tasksRes] = await Promise.all([
-        api.get<ApiResponse<TaskStatistics>>('/admin/statistics/overview'),
+        api.get<ApiResponse<TaskStatistics>>(`/admin/statistics/overview?${statsParams.toString()}`),
         api.get<ApiResponse<{ items: ExportTask[] }>>('/admin/tasks?page=1&page_size=10'),
       ]);
-      
+
       if (statsRes.data.code === 0) {
         setStatistics(statsRes.data.data);
       }
@@ -126,12 +152,49 @@ export default function Dashboard() {
     },
   ];
 
+  const handlePresetChange = (value: RangePreset) => {
+    setRangePreset(value);
+    if (value !== 'custom') {
+      setDateRange(getPresetRange(value));
+    }
+  };
+
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 24 }}>
-        仪表盘
-      </Title>
-      
+      <Row justify="space-between" align="middle" gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col>
+          <Title level={4} style={{ margin: 0 }}>
+            仪表盘
+          </Title>
+          <Text type="secondary">当前统计区间：{dateRange[0].format('YYYY-MM-DD')} ~ {dateRange[1].format('YYYY-MM-DD')}</Text>
+        </Col>
+        <Col>
+          <Space wrap>
+            <Select<RangePreset>
+              style={{ width: 140 }}
+              value={rangePreset}
+              onChange={handlePresetChange}
+              options={[
+                { label: '最近7天', value: '7d' },
+                { label: '最近30天', value: '30d' },
+                { label: '最近90天', value: '90d' },
+                { label: '全部时间', value: 'all' },
+                { label: '自定义', value: 'custom' },
+              ]}
+            />
+            <RangePicker
+              value={dateRange}
+              allowClear={false}
+              onChange={(dates) => {
+                if (!dates) return;
+                setRangePreset('custom');
+                setDateRange(dates as [dayjs.Dayjs, dayjs.Dayjs]);
+              }}
+            />
+          </Space>
+        </Col>
+      </Row>
+
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}>
           <Card loading={loading}>
