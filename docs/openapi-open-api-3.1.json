@@ -1,0 +1,719 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Claw Export Platform 开放 API",
+    "description": "根据 docs/API.md 中“开放 API”章节生成，仅包含对外导出相关接口。",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://your-domain:8080",
+      "description": "默认服务地址"
+    }
+  ],
+  "tags": [
+    {
+      "name": "开放API",
+      "description": "租户调用导出服务"
+    }
+  ],
+  "security": [
+    {
+      "ApiKeyAuth": [],
+      "ApiSecretAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/export/tasks": {
+      "post": {
+        "tags": [
+          "开放API"
+        ],
+        "summary": "创建导出任务",
+        "description": "创建一个新的数据导出任务。",
+        "operationId": "createExportTask",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExportTaskRequest"
+              },
+              "example": {
+                "tidb_config_name": "production-db",
+                "s3_config_name": "backup-bucket",
+                "sql_text": "SELECT * FROM users WHERE created_at > '2024-01-01'",
+                "filetype": "sql",
+                "compress": "gzip",
+                "retention_hours": 168,
+                "task_name": "用户数据导出",
+                "biz_name": "账单月报",
+                "priority": 5
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "任务创建成功，等待执行",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateExportTaskResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          }
+        }
+      }
+    },
+    "/api/v1/export/tasks/{task_id}": {
+      "get": {
+        "tags": [
+          "开放API"
+        ],
+        "summary": "查询任务状态",
+        "description": "查询指定任务的执行状态。",
+        "operationId": "getExportTaskStatus",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "查询成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "开放API"
+        ],
+        "summary": "取消任务",
+        "description": "取消正在执行或等待中的任务。",
+        "operationId": "cancelExportTask",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "取消成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelTaskResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      }
+    },
+    "/api/v1/export/tasks/batch": {
+      "post": {
+        "tags": [
+          "开放API"
+        ],
+        "summary": "批量查询任务",
+        "description": "批量查询多个任务的状态。",
+        "operationId": "batchGetExportTasks",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchQueryTasksRequest"
+              },
+              "example": {
+                "task_ids": [
+                  123456789,
+                  123456790,
+                  123456791
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "查询成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchQueryTasksResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          }
+        }
+      }
+    },
+    "/api/v1/export/files/{task_id}": {
+      "get": {
+        "tags": [
+          "开放API"
+        ],
+        "summary": "获取文件下载链接",
+        "description": "单文件时返回 302 重定向到预签名地址；多文件时返回 JSON 文件清单。",
+        "operationId": "getExportFiles",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "多文件场景，返回文件清单",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetFilesResponse"
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "单文件场景，重定向到下载地址",
+            "headers": {
+              "Location": {
+                "description": "预签名下载链接",
+                "schema": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "租户 API Key"
+      },
+      "ApiSecretAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Secret",
+        "description": "租户 API Secret"
+      }
+    },
+    "parameters": {
+      "TaskId": {
+        "name": "task_id",
+        "in": "path",
+        "required": true,
+        "description": "任务 ID",
+        "schema": {
+          "type": "integer",
+          "format": "int64",
+          "minimum": 1
+        }
+      }
+    },
+    "responses": {
+      "Error400": {
+        "description": "参数错误",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "code": 40001,
+              "message": "参数错误",
+              "data": null
+            }
+          }
+        }
+      },
+      "Error401": {
+        "description": "认证失败",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "code": 40103,
+              "message": "API Key 无效",
+              "data": null
+            }
+          }
+        }
+      },
+      "Error403": {
+        "description": "配额超限或无权限",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "code": 42901,
+              "message": "并发任务数已达上限",
+              "data": null
+            }
+          }
+        }
+      },
+      "Error404": {
+        "description": "资源不存在",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "code": 40002,
+              "message": "资源不存在",
+              "data": null
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "CreateExportTaskRequest": {
+        "type": "object",
+        "required": [
+          "tidb_config_name",
+          "s3_config_name",
+          "sql_text"
+        ],
+        "properties": {
+          "tidb_config_name": {
+            "type": "string",
+            "description": "TiDB 配置名称（需提前创建）"
+          },
+          "s3_config_name": {
+            "type": "string",
+            "description": "S3 配置名称（需提前创建）"
+          },
+          "sql_text": {
+            "type": "string",
+            "description": "SQL 查询语句"
+          },
+          "filetype": {
+            "type": "string",
+            "enum": [
+              "sql",
+              "csv"
+            ],
+            "default": "sql",
+            "description": "文件类型"
+          },
+          "compress": {
+            "type": "string",
+            "enum": [
+              "",
+              "gzip",
+              "snappy",
+              "zstd"
+            ],
+            "description": "压缩方式，空字符串表示不压缩"
+          },
+          "retention_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 168,
+            "description": "文件保留时间（小时）"
+          },
+          "task_name": {
+            "type": "string",
+            "description": "任务名称（展示用途）"
+          },
+          "biz_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "业务名称（优先用于文件命名展示）"
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5,
+            "description": "优先级，越大越优先"
+          }
+        }
+      },
+      "ApiEnvelope": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "description": "业务状态码，0 表示成功"
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {}
+        }
+      },
+      "ErrorResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApiEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "data": {
+                "type": "null"
+              }
+            }
+          }
+        ]
+      },
+      "TaskFile": {
+        "type": "object",
+        "required": [
+          "index",
+          "name",
+          "raw_name",
+          "path",
+          "url",
+          "size"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "对外展示/下载文件名"
+          },
+          "raw_name": {
+            "type": "string",
+            "description": "导出工具生成的原始文件名"
+          },
+          "path": {
+            "type": "string",
+            "description": "对象存储 key"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "文件大小（字节）"
+          }
+        }
+      },
+      "TaskStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "success",
+          "failed",
+          "canceled",
+          "expired"
+        ]
+      },
+      "CreateExportTaskData": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateExportTaskResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApiEnvelope"
+          },
+          {
+            "type": "object",
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/CreateExportTaskData"
+              }
+            }
+          }
+        ]
+      },
+      "TaskStatusData": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "status"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "task_name": {
+            "type": "string"
+          },
+          "biz_name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "file_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskFile"
+            }
+          },
+          "file_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "file_size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "row_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error_message": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TaskStatusResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApiEnvelope"
+          },
+          {
+            "type": "object",
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/TaskStatusData"
+              }
+            }
+          }
+        ]
+      },
+      "CancelTaskData": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "status"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "canceled"
+            ]
+          }
+        }
+      },
+      "CancelTaskResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApiEnvelope"
+          },
+          {
+            "type": "object",
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/CancelTaskData"
+              }
+            }
+          }
+        ]
+      },
+      "BatchQueryTasksRequest": {
+        "type": "object",
+        "required": [
+          "task_ids"
+        ],
+        "properties": {
+          "task_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "任务 ID 列表"
+          }
+        }
+      },
+      "BatchTaskItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TaskStatusData"
+          }
+        ]
+      },
+      "BatchQueryTasksResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApiEnvelope"
+          },
+          {
+            "type": "object",
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BatchTaskItem"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "GetFilesData": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "status",
+          "file_count",
+          "files"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "file_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskFile"
+            }
+          }
+        }
+      },
+      "GetFilesResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApiEnvelope"
+          },
+          {
+            "type": "object",
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/GetFilesData"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
