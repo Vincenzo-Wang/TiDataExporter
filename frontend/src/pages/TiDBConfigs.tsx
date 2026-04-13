@@ -45,6 +45,7 @@ export default function TiDBConfigs() {
   const handleEdit = (config: TiDBConfig) => {
     setEditingConfig(config);
     form.setFieldsValue({
+      tenant_id: config.tenant_id,
       name: config.name,
       host: config.host,
       port: config.port,
